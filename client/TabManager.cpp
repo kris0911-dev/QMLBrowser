@@ -12,6 +12,11 @@
 #include <QUuid>
 #include <QWindow>
 
+#ifdef Q_OS_MACOS
+#  include <objc/message.h>
+#  include <objc/runtime.h>
+#endif
+
 #ifdef Q_OS_WIN
 #  define WIN32_LEAN_AND_MEAN
 #  define NOMINMAX
@@ -51,12 +56,16 @@ void hideChild(WId child)
 TabManager::TabManager(QObject *parent)
     : QObject(parent)
 {
-    m_channelName = QStringLiteral("qmlbrowser-%1-%2")
+    // macOS sockaddr_un::sun_path holds 104 bytes, and QDir::tempPath() is
+    // already "/private/var/folders/...". A full UUID makes listen() fail with
+    // a name error, the renderer cannot connect, and it exits 1.
+    m_channelName = QStringLiteral("qb-%1-%2")
                             .arg(QCoreApplication::applicationPid())
-                            .arg(QUuid::createUuid().toString(QUuid::Id128));
+                            .arg(QUuid::createUuid().toString(QUuid::Id128).left(8));
 
     m_server = new QLocalServer(this);
     m_server->setSocketOptions(QLocalServer::UserAccessOption);
+    QLocalServer::removeServer(m_channelName);
     if (!m_server->listen(m_channelName))
         qWarning("Cannot open the renderer channel: %s", qPrintable(m_server->errorString()));
 
@@ -179,7 +188,7 @@ void TabManager::addTab(const QString &url)
     }
 
     auto *tab = new BrowserTab(m_nextTabId++, m_channelName, m_hostWindow, this);
-    connect(tab, &BrowserTab::attached, this, &TabManager::updatePlacement);
+    connect(tab, &BrowserTab::attached, this, [this] { updatePlacement(); });
     connect(tab, &BrowserTab::shortcutRequested, this, &TabManager::handleShortcut);
     connect(tab, &BrowserTab::fullScreenRequested, this, &TabManager::setFullScreen);
     tab->setChromeFullScreen(m_fullScreen);
@@ -289,7 +298,30 @@ void TabManager::setCurrentIndex(int index)
     updatePlacement();
 }
 
-void TabManager::updatePlacement()
+namespace {
+
+int hostWindowNumber(QWindow *host)
+{
+#ifdef Q_OS_MACOS
+    if (!host)
+        return 0;
+    using SendId = id (*)(id, SEL);
+    auto msg = reinterpret_cast<SendId>(objc_msgSend);
+    id nsView = reinterpret_cast<id>(host->winId());
+    id nsWindow = nsView ? msg(nsView, sel_getUid("window")) : nil;
+    if (!nsWindow)
+        return 0;
+    return int(reinterpret_cast<long (*)(id, SEL)>(objc_msgSend)(
+            nsWindow, sel_getUid("windowNumber")));
+#else
+    Q_UNUSED(host)
+    return 0;
+#endif
+}
+
+} // namespace
+
+void TabManager::updatePlacement(bool force)
 {
 #ifdef Q_OS_WIN
     for (int i = 0; i < m_tabs.size(); ++i) {
@@ -321,12 +353,13 @@ void TabManager::updatePlacement()
                        origin.y() + qRound(m_viewportRect.y() / ratio),
                        qRound(m_viewportRect.width() / ratio),
                        qRound(m_viewportRect.height() / ratio));
+    const int above = hostWindowNumber(host);
 
     for (int i = 0; i < m_tabs.size(); ++i) {
         auto *tab = qobject_cast<BrowserTab *>(m_tabs.at(i));
         if (!tab || !tab->isAttached())
             continue;
-        tab->place(showCurrent && i == m_currentIndex, screen);
+        tab->place(showCurrent && i == m_currentIndex, screen, above, force && i == m_currentIndex);
     }
 #endif
 }

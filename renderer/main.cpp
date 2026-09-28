@@ -12,6 +12,13 @@
 #include <QQmlEngine>
 #include <QQuickItem>
 #include <QQuickView>
+#include <QRect>
+
+#ifdef Q_OS_MACOS
+#  include <objc/message.h>
+#  include <objc/runtime.h>
+#  include <unistd.h>
+#endif
 #include <QTimer>
 #include <QWindow>
 
@@ -22,6 +29,185 @@
 #endif
 
 namespace {
+
+#ifdef Q_OS_MACOS
+// Accessory: no Dock icon and no menu bar. Regular would add one icon per tab.
+void hideFromDock()
+{
+    using SendId = id (*)(id, SEL);
+    auto msg = reinterpret_cast<SendId>(objc_msgSend);
+    id nsApp = msg(reinterpret_cast<id>(objc_getClass("NSApplication")),
+                   sel_getUid("sharedApplication"));
+    if (!nsApp)
+        return;
+    // Already an accessory. Setting the policy again while this process is
+    // active resigns it, and the browser stays inactive until its title bar
+    // is clicked.
+    const long policy = reinterpret_cast<long (*)(id, SEL)>(objc_msgSend)(
+            nsApp, sel_getUid("activationPolicy"));
+    if (policy == 1L)
+        return;
+    const BOOL active = reinterpret_cast<BOOL (*)(id, SEL)>(objc_msgSend)(
+            nsApp, sel_getUid("isActive"));
+    if (active)
+        return;
+    // NSApplicationActivationPolicyAccessory == 1
+    reinterpret_cast<BOOL (*)(id, SEL, long)>(objc_msgSend)(
+            nsApp, sel_getUid("setActivationPolicy:"), 1L);
+}
+
+id pageNsWindow(QWindow *window)
+{
+    if (!window)
+        return nil;
+    window->create();
+    using SendId = id (*)(id, SEL);
+    auto msg = reinterpret_cast<SendId>(objc_msgSend);
+    id nsView = reinterpret_cast<id>(window->winId());
+    if (!nsView)
+        return nil;
+    return msg(nsView, sel_getUid("window"));
+}
+
+using CanBecomeKeyFn = BOOL (*)(id, SEL);
+CanBecomeKeyFn originalCanBecomeKey = nullptr;
+
+BOOL pageCannotBecomeKey(id, SEL)
+{
+    return NO;
+}
+
+void setPageRefusesKey(bool refuse)
+{
+    Class panel = objc_getClass("QNSPanel");
+    if (!panel)
+        return;
+    Method method = class_getInstanceMethod(panel, sel_getUid("canBecomeKeyWindow"));
+    if (!method)
+        return;
+    if (!originalCanBecomeKey)
+        originalCanBecomeKey = reinterpret_cast<CanBecomeKeyFn>(method_getImplementation(method));
+    method_setImplementation(method,
+                             refuse ? reinterpret_cast<IMP>(pageCannotBecomeKey)
+                                    : reinterpret_cast<IMP>(originalCanBecomeKey));
+}
+
+// The page sits above the browser, but it must not become the key window until
+// the user actually clicks it. show() and orderFrontRegardless otherwise activate
+// this process a moment later, and the browser stays inactive until its title
+// bar is clicked.
+class TakeKeyOnPress : public QObject
+{
+public:
+    explicit TakeKeyOnPress(QWindow *window)
+        : QObject(window), m_window(window) {}
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        if (event->type() != QEvent::MouseButtonPress)
+            return QObject::eventFilter(watched, event);
+        setPageRefusesKey(false);
+        if (m_window)
+            m_window->requestActivate();
+        if (watched)
+            watched->removeEventFilter(this);
+        deleteLater();
+        return false;
+    }
+
+private:
+    QWindow *m_window = nullptr;
+};
+
+// show() on a Qt::Tool NSPanel calls makeKeyAndOrderFront, which makes this
+// process the active app. The browser then looks inactive until its title bar
+// is clicked. becomesKeyOnlyIfNeeded makes that show use orderFront instead.
+void showWithoutTakingKey(QWindow *window)
+{
+    id nsWindow = pageNsWindow(window);
+    setPageRefusesKey(true);
+    SEL setKey = sel_getUid("setBecomesKeyOnlyIfNeeded:");
+    const bool panel = nsWindow && reinterpret_cast<BOOL (*)(id, SEL, SEL)>(objc_msgSend)(
+            nsWindow, sel_getUid("respondsToSelector:"), setKey);
+    if (panel) {
+        reinterpret_cast<void (*)(id, SEL, BOOL)>(objc_msgSend)(
+                nsWindow, sel_getUid("setHidesOnDeactivate:"), NO);
+        reinterpret_cast<void (*)(id, SEL, BOOL)>(objc_msgSend)(nsWindow, setKey, YES);
+    }
+    window->show();
+    if (panel)
+        reinterpret_cast<void (*)(id, SEL, BOOL)>(objc_msgSend)(nsWindow, setKey, NO);
+    window->installEventFilter(new TakeKeyOnPress(window));
+}
+
+// Qt's raise() calls orderFront, which a background process cannot use to
+// cover the active browser. The page then sits behind the window that asked
+// for it, and the tab looks empty until a later hide/show.
+// orderFrontRegardless is what actually covers the browser, and it also makes
+// AppKit activate this process a moment later. Pass false when only the level
+// has to be restored after giving activation back.
+void stackPage(QWindow *window, int aboveWindowNumber, bool forceFront)
+{
+    id nsWindow = pageNsWindow(window);
+    if (!nsWindow)
+        return;
+
+    using SendVoidLong = void (*)(id, SEL, long);
+    // NSFloatingWindowLevel. At normal level the page is covered by the browser.
+    reinterpret_cast<SendVoidLong>(objc_msgSend)(nsWindow, sel_getUid("setLevel:"), 3L);
+    // The renderer process is not the active app. A tool window that hides on
+    // deactivate never appears over the browser that opened the tab.
+    reinterpret_cast<void (*)(id, SEL, BOOL)>(objc_msgSend)(
+            nsWindow, sel_getUid("setHidesOnDeactivate:"), NO);
+    if (aboveWindowNumber > 0) {
+        // NSWindowAbove == 1.
+        reinterpret_cast<void (*)(id, SEL, long, long)>(objc_msgSend)(
+                nsWindow, sel_getUid("orderWindow:relativeTo:"), 1L, long(aboveWindowNumber));
+    }
+    if (forceFront) {
+        reinterpret_cast<void (*)(id, SEL, id)>(objc_msgSend)(
+                nsWindow, sel_getUid("orderFrontRegardless"), nil);
+    }
+    // Showing a window promotes the process back to a regular app, which puts
+    // another icon in the Dock. Put the accessory policy back afterwards.
+    hideFromDock();
+}
+
+void orderPageAbove(QWindow *window, int aboveWindowNumber)
+{
+    stackPage(window, aboveWindowNumber, true);
+}
+
+void activateBrowser()
+{
+    id runningApp = reinterpret_cast<id>(objc_getClass("NSRunningApplication"));
+    id browser = runningApp ? reinterpret_cast<id (*)(id, SEL, int)>(objc_msgSend)(
+            runningApp, sel_getUid("runningApplicationWithProcessIdentifier:"),
+            int(getppid())) : nil;
+    if (browser) {
+        // NSApplicationActivateIgnoringOtherApps == 1 << 1
+        reinterpret_cast<BOOL (*)(id, SEL, unsigned long)>(objc_msgSend)(
+                browser, sel_getUid("activateWithOptions:"), 2UL);
+    }
+}
+
+// orderFrontRegardless makes this process frontmost a moment after show, even
+// when the page window cannot become key. Put the browser back in front.
+// Limited to the show itself; a later click on the page is allowed to take over
+// because these timers have already finished.
+void keepBrowserInFront(QWindow *window, int aboveWindowNumber)
+{
+    const auto kick = [window, aboveWindowNumber] {
+        activateBrowser();
+        stackPage(window, aboveWindowNumber, false);
+    };
+    QTimer::singleShot(0, window, kick);
+    QTimer::singleShot(40, window, kick);
+    QTimer::singleShot(120, window, kick);
+    QTimer::singleShot(250, window, kick);
+}
+#endif
 
 // Browser-level keys are owned by the browser process, but while the user is
 // interacting with a page the keyboard focus lives here. Catch that handful of
@@ -174,6 +360,9 @@ int main(int argc, char *argv[])
 {
     QGuiApplication app(argc, argv);
     QGuiApplication::setApplicationName(QStringLiteral("QmlRenderer"));
+#ifdef Q_OS_MACOS
+    hideFromDock();
+#endif
 
     QCommandLineParser parser;
     parser.setApplicationDescription(
@@ -303,13 +492,37 @@ int main(int argc, char *argv[])
                                  view.hide();
                                  return;
                              }
-                             view.setGeometry(message.value(QStringLiteral("x")).toInt(),
+                             const QRect rect(message.value(QStringLiteral("x")).toInt(),
                                               message.value(QStringLiteral("y")).toInt(),
                                               message.value(QStringLiteral("width")).toInt(),
                                               message.value(QStringLiteral("height")).toInt());
-                             if (!view.isVisible())
+                             const bool wasHidden = !view.isVisible();
+                             if (wasHidden) {
+                                 view.setGeometry(rect);
+#ifdef Q_OS_MACOS
+                                 showWithoutTakingKey(&view);
+#else
                                  view.show();
+#endif
+                             }
+                             view.setGeometry(rect);
+                             if (root)
+                                 root->setSize(rect.size());
+                             view.requestUpdate();
+#ifdef Q_OS_MACOS
+                             const int above = message.value(QStringLiteral("above")).toInt();
+                             orderPageAbove(&view, above);
+                             if (wasHidden) {
+                                 keepBrowserInFront(&view, above);
+                                 QTimer::singleShot(0, &view, [&view, above] {
+                                     orderPageAbove(&view, above);
+                                     activateBrowser();
+                                     view.requestUpdate();
+                                 });
+                             }
+#else
                              view.raise();
+#endif
                          } else if (type == QLatin1String("navigate")) {
                              page->setUrl(QUrl(message.value(QStringLiteral("url")).toString()));
                          } else if (type == QLatin1String("reload")) {
@@ -337,7 +550,17 @@ int main(int argc, char *argv[])
                          }
                      });
 
-    QObject::connect(socket, &QLocalSocket::connected, &app, [channel, tabId, &view] {
+    socket->connectToServer(parser.value(channelOption));
+    if (!socket->waitForConnected(5000)) {
+        qWarning("Could not reach the browser process.");
+        return 1;
+    }
+
+    // waitForConnected() pumps a nested event loop. The browser answers hello
+    // immediately with place, and showing the window from that nested loop marks
+    // it visible without AppKit mapping it. A later place with the same rectangle
+    // is then skipped, so the tab stays blank until it is hidden and shown again.
+    QTimer::singleShot(0, &app, [channel, tabId, &view] {
         QJsonObject hello;
         hello.insert(QStringLiteral("type"), QStringLiteral("hello"));
         hello.insert(QStringLiteral("tab"), tabId);
@@ -345,12 +568,6 @@ int main(int argc, char *argv[])
         hello.insert(QStringLiteral("pid"), QCoreApplication::applicationPid());
         channel->send(hello);
     });
-
-    socket->connectToServer(parser.value(channelOption));
-    if (!socket->waitForConnected(5000)) {
-        qWarning("Could not reach the browser process.");
-        return 1;
-    }
 
     return app.exec();
 }

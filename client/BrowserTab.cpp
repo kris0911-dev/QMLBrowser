@@ -136,6 +136,7 @@ void BrowserTab::startProcess()
     m_rendererPid = 0;
     m_placedVisible = false;
     m_placedRect = QRect();
+    m_aboveWindow = 0;
 
     const QString program = rendererExecutable();
 
@@ -169,6 +170,11 @@ void BrowserTab::onProcessFinished(int exitCode, int status)
             : QStringLiteral("The renderer process for this tab exited with code %1.").arg(exitCode);
 
     emit stateChanged();
+}
+
+bool BrowserTab::isAttached() const
+{
+    return m_channel != nullptr && m_childWindow != 0;
 }
 
 void BrowserTab::attach(IpcChannel *channel, WId childWindow, qint64 pid)
@@ -208,15 +214,17 @@ void BrowserTab::setChromeHidden(bool hidden)
     sendChromeState();
 }
 
-void BrowserTab::place(bool visible, const QRect &screenRect)
+void BrowserTab::place(bool visible, const QRect &screenRect, int aboveWindow, bool force)
 {
     if (!m_channel)
         return;
-    if (visible == m_placedVisible && screenRect == m_placedRect)
+    if (!force && visible == m_placedVisible && screenRect == m_placedRect
+            && aboveWindow == m_aboveWindow)
         return;
 
     m_placedVisible = visible;
     m_placedRect = screenRect;
+    m_aboveWindow = aboveWindow;
 
     QJsonObject message;
     message.insert(QStringLiteral("type"), QStringLiteral("place"));
@@ -225,6 +233,7 @@ void BrowserTab::place(bool visible, const QRect &screenRect)
     message.insert(QStringLiteral("y"), screenRect.y());
     message.insert(QStringLiteral("width"), screenRect.width());
     message.insert(QStringLiteral("height"), screenRect.height());
+    message.insert(QStringLiteral("above"), aboveWindow);
     m_channel->send(message);
 }
 

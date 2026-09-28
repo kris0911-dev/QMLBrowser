@@ -62,7 +62,7 @@ public:
 
     BrowserHistory *history() const { return m_history; }
     WId childWindow() const { return m_childWindow; }
-    bool isAttached() const { return m_channel != nullptr && m_childWindow != 0; }
+    bool isAttached() const;
 
     // Called by TabManager once the renderer has connected back.
     void attach(IpcChannel *channel, WId childWindow, qint64 pid);
@@ -73,7 +73,8 @@ public:
 
     // macOS cannot SetWindowPos a window that belongs to another process, so the
     // renderer moves its own window. screenRect is in global logical pixels.
-    void place(bool visible, const QRect &screenRect);
+    // aboveWindow is the browser's macOS window number. Zero elsewhere.
+    void place(bool visible, const QRect &screenRect, int aboveWindow = 0, bool force = false);
 
     void navigateTo(const QUrl &url);
     Q_INVOKABLE void navigateToText(const QString &text);
@@ -127,4 +128,5 @@ private:
     bool m_chromeHidden = false;
     bool m_placedVisible = false;
     QRect m_placedRect;
+    int m_aboveWindow = 0;
 };

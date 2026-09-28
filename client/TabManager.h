@@ -91,7 +91,7 @@ private:
     void onNewConnection();
     void onHello(IpcChannel *channel, const QJsonObject &message);
     BrowserTab *tabById(int id) const;
-    void updatePlacement();
+    void updatePlacement(bool force = false);
 
     QLocalServer *m_server = nullptr;
     QString m_channelName;

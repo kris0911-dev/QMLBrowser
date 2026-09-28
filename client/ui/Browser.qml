@@ -398,7 +398,7 @@ Window {
                 onHoveredChanged: window.hint = hovered ? tooltip : ""
             }
             ToolButton {
-                glyph: "\u26F6"
+                mark: "fullscreen"
                 tooltip: "Full screen  (F11)"
                 onClicked: tabs.toggleFullScreen()
                 onHoveredChanged: window.hint = hovered ? tooltip : ""

@@ -25,6 +25,11 @@ endif()
 
 qt_standard_project_setup()
 
+# qt_standard_project_setup enables moc and uic only. The client and renderer
+# still ship their QML through resources.qrc, so autorcc has to be on or
+# qrc:/ui/Browser.qml is missing at runtime.
+set(CMAKE_AUTORCC ON)
+
 qt_add_library(qmlbrowser_ipc STATIC
     shared/IpcChannel.cpp
     shared/IpcChannel.h
@@ -91,6 +96,11 @@ if(APPLE)
     )
     set_target_properties(QmlBrowser PROPERTIES
         XCODE_SCHEME_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    )
+    # Each tab is a QmlRenderer process. LSUIElement makes that bundle an agent,
+    # so macOS does not give it a Dock icon. Only QmlBrowser stays in the Dock.
+    set_target_properties(QmlRenderer PROPERTIES
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/renderer/Info.plist.in"
     )
 
     function(qmlbrowser_bundle_qt_conf target)
