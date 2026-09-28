@@ -1,0 +1,90 @@
+cmake_minimum_required(VERSION 3.21)
+
+project(QmlBrowser VERSION 1.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# One Xcode scheme per target, with Debug as a run configuration.
+set(CMAKE_XCODE_GENERATE_SCHEME ON)
+
+find_package(Qt6 6.2 REQUIRED COMPONENTS Core Network Gui Qml Quick)
+
+if(APPLE)
+    get_filename_component(QMLBROWSER_QT_PREFIX "${Qt6_DIR}/../../.." ABSOLUTE)
+    # So an Xcode Debug run finds QtCore and the cocoa plugin without a deploy step.
+    set(CMAKE_BUILD_RPATH "${QMLBROWSER_QT_PREFIX}/lib")
+endif()
+
+qt_standard_project_setup()
+
+qt_add_library(qmlbrowser_ipc STATIC
+    shared/IpcChannel.cpp
+    shared/IpcChannel.h
+)
+target_include_directories(qmlbrowser_ipc PUBLIC "${CMAKE_SOURCE_DIR}/shared")
+target_link_libraries(qmlbrowser_ipc PUBLIC Qt6::Network)
+
+qt_add_executable(QmlServer
+    server/main.cpp
+    server/HttpServer.cpp
+    server/HttpServer.h
+)
+target_link_libraries(QmlServer PRIVATE Qt6::Core Qt6::Network)
+set_target_properties(QmlServer PROPERTIES
+    MACOSX_BUNDLE FALSE
+    WIN32_EXECUTABLE FALSE
+)
+
+qt_add_executable(QmlBrowser
+    client/main.cpp
+    client/BrowserHistory.cpp
+    client/BrowserHistory.h
+    client/BrowserTab.cpp
+    client/BrowserTab.h
+    client/TabManager.cpp
+    client/TabManager.h
+    client/TabViewport.cpp
+    client/TabViewport.h
+    client/WindowFrame.cpp
+    client/WindowFrame.h
+    client/resources.qrc
+)
+target_link_libraries(QmlBrowser PRIVATE qmlbrowser_ipc Qt6::Gui Qt6::Qml Qt6::Quick)
+if(WIN32)
+    target_link_libraries(QmlBrowser PRIVATE dwmapi)
+endif()
+
+qt_add_executable(QmlRenderer
+    renderer/main.cpp
+    renderer/PageView.cpp
+    renderer/PageView.h
+    renderer/resources.qrc
+)
+target_link_libraries(QmlRenderer PRIVATE qmlbrowser_ipc Qt6::Gui Qt6::Qml Qt6::Quick)
+
+if(APPLE)
+    # Local debugging does not need an Apple Developer team.
+    set(_qmlbrowser_nosign
+        XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "-"
+        XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED NO
+    )
+    set_target_properties(QmlBrowser QmlRenderer QmlServer PROPERTIES ${_qmlbrowser_nosign})
+    set_target_properties(QmlBrowser PROPERTIES
+        XCODE_SCHEME_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    )
+
+    function(qmlbrowser_bundle_qt_conf target)
+        set(conf "${CMAKE_BINARY_DIR}/${target}-qt.conf")
+        file(WRITE "${conf}" "[Paths]\nPrefix=${QMLBROWSER_QT_PREFIX}\n")
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:${target}>/Resources"
+            COMMAND ${CMAKE_COMMAND} -E copy "${conf}" "$<TARGET_BUNDLE_CONTENT_DIR:${target}>/Resources/qt.conf"
+            COMMENT "Point ${target} at the Qt macOS kit"
+            VERBATIM)
+    endfunction()
+
+    qmlbrowser_bundle_qt_conf(QmlBrowser)
+    qmlbrowser_bundle_qt_conf(QmlRenderer)
+endif()

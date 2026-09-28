@@ -1,0 +1,48 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "macos-debug",
+      "displayName": "macOS Debug (Ninja)",
+      "description": "Debug build for Qt Creator. Set QTDIR to the Qt macOS kit first, for example $HOME/Qt/6.10.3/macos.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/macos-debug",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_PREFIX_PATH": "$env{QTDIR}"
+      }
+    },
+    {
+      "name": "macos-xcode",
+      "displayName": "macOS Debug (Xcode)",
+      "description": "Xcode project. Open the generated project, pick the QmlBrowser scheme, and run the Debug configuration.",
+      "generator": "Xcode",
+      "binaryDir": "${sourceDir}/build/macos-xcode",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "$env{QTDIR}"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "macos-debug",
+      "configurePreset": "macos-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "macos-xcode",
+      "configurePreset": "macos-xcode",
+      "configuration": "Debug"
+    }
+  ]
+}
