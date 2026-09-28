@@ -27,10 +27,11 @@ QmlBrowser.exe                         QmlServer.exe  or  node server.js
         v                                        |
   QmlRenderer.exe  ---- HTTP GET --------------+
     one process per tab
-    QQuickView, reparented into the browser window
+    Windows: QQuickView reparented into the browser
+    macOS: frameless tool window, moved by place
 ```
 
-State (URL, title, HTTP status, shortcuts) travels on the local socket. The size and position of the page do not. On Windows the browser moves the renderer's native window with `SetWindowPos` and `ShowWindow`.
+State (URL, title, HTTP status, shortcuts) travels on the local socket. On Windows the size and position of the page do not: the browser moves the renderer's native window with `SetWindowPos` and `ShowWindow`. On macOS that window id is not usable across processes, so the browser sends the rectangle in a `place` message.
 
 ## Requirements
 
@@ -58,7 +59,7 @@ There is no CMake and no qmake step. `moc` and `rcc` are MSBuild custom build st
 
 Open `build/macos-xcode/QmlBrowser.xcodeproj`. Run the QmlServer scheme, then debug the QmlBrowser scheme. Qt Creator uses the `macos-debug` preset the same way: Debug, `CMAKE_PREFIX_PATH` from `QTDIR`.
 
-On macOS the page is not a child window. The browser sends `{ "type": "place", "visible", "x", "y", "width", "height" }` in global logical pixels, and the renderer moves its own frameless window. The custom caption, `WM_ERASEBKGND`, and `WM_SETCURSOR` are still Windows-only.
+On macOS the page is not a child window. The browser sends `{ "type": "place", "visible", "x", "y", "width", "height", "above" }` in global logical pixels. `above` is the browser `NSWindow`'s `windowNumber`. The renderer is a frameless `Qt::Tool` window at floating level, ordered above that window. `QmlRenderer.app` is an agent (`LSUIElement` in `renderer/Info.plist.in`), and the process sets the accessory activation policy, so a tab does not get a Dock icon. A show does not take key from the browser; the first click on the page does. The custom caption, `WM_ERASEBKGND`, and `WM_SETCURSOR` are still Windows-only.
 
 The Node server runs there with Node.js 18 or newer and no packages:
 
@@ -364,7 +365,7 @@ Percent-decoding uses `decodeURIComponent`. A broken `%` sequence is `400`. The 
 QmlRenderer.exe --channel <name> --tab <id> --parent <browser window id>
 ```
 
-The renderer connects and sends `hello` with its own window handle and process id. The view is frameless and its clear color is `#0e1017`. On Windows it reparents into the browser with `QWindow::fromWinId` and `QWindow::setParent`, and the browser shows and moves that child with `SetWindowPos` and `ShowWindow` after `hello`. On macOS that handle is not a cross-process window id, so the renderer stays a top-level window and applies `place` messages instead.
+The renderer connects, then sends `hello` on the next event-loop turn, with its own window handle and process id. Sending it from inside `waitForConnected` would show the window from a nested loop, and AppKit would leave the tab blank. The view is frameless and its clear color is `#0e1017`. On Windows it reparents into the browser with `QWindow::fromWinId` and `QWindow::setParent`, and the browser shows and moves that child with `SetWindowPos` and `ShowWindow` after `hello`. On macOS that handle is not a cross-process window id, so the renderer stays its own window and applies `place` messages instead.
 
 `QmlRenderer.exe` refuses to start without `--channel` (exit 2). If it cannot connect within 5 seconds it exits 1. If the browser disconnects, the renderer quits.
 
@@ -384,13 +385,13 @@ Browser to renderer:
 | `reload` | | Fetch the current URL again. |
 | `stop` | | Abort the current download. |
 | `chrome` | `fullScreen` bool, `chromeHidden` bool | Remember whether the chrome is off screen, and set the on-page notice. |
-| `place` | `visible` bool, `x`, `y`, `width`, `height` | macOS only. Move or hide the renderer's own window. Coordinates are global logical pixels. Windows keeps using `SetWindowPos` and does not send this. |
+| `place` | `visible` bool, `x`, `y`, `width`, `height`, `above` number | macOS only. Move or hide the renderer's own window and stack it above `above` (the browser window number, or 0). Coordinates are global logical pixels. A repeated rectangle is not sent again unless placement is forced. Windows keeps using `SetWindowPos` and does not send this. |
 
 Renderer to browser:
 
 | type | Fields | Effect |
 |---|---|---|
-| `hello` | `tab` number, `winId` number, `pid` number | The child window exists and can be placed. |
+| `hello` | `tab` number, `winId` number, `pid` number | The renderer window exists and can be placed. On Windows that window is the child. On macOS it is the tool window. |
 | `state` | `status`, `title`, `url`, `httpStatus`, `progress`, `error`, `bytes` | Update the tab strip, address bar, and status line. Sent at most once per event-loop turn. |
 | `source` | `text` | The source panel. |
 | `navigate` | `url` | The page called `browser.navigate`. The browser owns history and sends a `navigate` back. |
@@ -399,7 +400,7 @@ Renderer to browser:
 
 `status` in `state` matches `PageView`: 0 null, 1 loading, 2 ready, 3 error. `bytes` is the character length of the source.
 
-`TabViewport` publishes the page rectangle in device pixels on `QQuickWindow::afterAnimating`. On Windows that is what moves the child window when the window is resized, when the bars show or hide, or when the DPI scale changes. Only the active tab's renderer is shown.
+`TabViewport` publishes the page rectangle in device pixels on `QQuickWindow::afterAnimating`. On Windows that moves the child window when the window is resized, when the bars show or hide, or when the DPI scale changes. On macOS `syncPlacement` also runs when the browser window moves, because the page is a separate window and an unchanged viewport rectangle still has a new screen position. Only the active tab's renderer is shown.
 
 ## The window, on Windows
 
@@ -415,7 +416,7 @@ The renderer is a child window. Windows forwards `WM_SETCURSOR` for that child t
 
 The renderer window sits above anything the chrome draws in the same rectangle. Hints that must stay visible over the page are either the status line or a notice drawn by the renderer. The crash page is visible only while that tab has no live child window.
 
-On macOS none of this native frame, cursor, or erase handling runs. The QML underlay (`#0e1017`) is still there, and the page is a separate frameless window kept over the viewport by `place`.
+On macOS none of this native frame, cursor, or erase handling runs. The QML underlay (`#0e1017`) is still there. The page is a separate frameless tool window. `place` moves it and orders it above the browser at floating window level. Showing it activates the browser process again so the tab does not steal the menu bar. The first mouse press on the page is what makes that window key.
 
 ## Source tree
 
@@ -424,9 +425,9 @@ qt.props                 Windows Qt location, warnings, output directories
 QmlBrowser.sln            Windows solution
 build.bat                msbuild Debug or Release, x64
 run.bat                  QmlServer.exe, then QmlBrowser.exe
-CMakeLists.txt           macOS (and any CMake) build of the same three programs
-CMakePresets.json        macos-debug (Ninja) and macos-xcode, both Debug
-build-macos.sh           configure the Xcode Debug build from QTDIR
+CMakeLists.txt           CMake build. Apple requires Qt 6.7; other platforms require Qt 6.10
+CMakePresets.json        macos-debug (Ninja) and macos-xcode, both Debug, deployment target 11.0
+build-macos.sh           configure the Xcode Debug build from QTDIR (Qt 6.7.3)
 README.md                short overview and prerequisites
 DOCUMENTATION.md         this file
 
@@ -457,7 +458,8 @@ client\                  QmlBrowser.exe
   resources.qrc          chrome compiled into the executable
 
 renderer\                QmlRenderer.exe
-  main.cpp               child window, IPC, shortcuts, cursor, erase
+  main.cpp               child window on Windows, place and AppKit stacking on macOS, IPC, shortcuts
+  Info.plist.in          LSUIElement so the macOS renderer bundle has no Dock icon
   PageView.h/.cpp        download and instantiate one document
   ui\Renderer.qml        page, spinner, error page, full-screen notice
   resources.qrc

@@ -10,8 +10,8 @@ programs:
 | `QmlRenderer.exe` | One process per tab. Fetches a document, compiles it with the Qt Quick engine and draws it. |
 
 There is no Chromium, no `QWebEngineView`, no HTML parser and no `QtWebView`
-anywhere in the build. Rendering is the Qt Quick scene graph talking to
-Direct3D 11 through Qt RHI.
+anywhere in the build. Rendering is the Qt Quick scene graph through Qt RHI:
+Direct3D 11 on Windows, Metal on macOS.
 
 `DOCUMENTATION.md` describes the project: the HTTP server, the page API, the
 address bar, and the messages between the browser and a tab.
@@ -58,7 +58,7 @@ In Xcode choose the **QmlServer** scheme and Run it, then the **QmlBrowser** sch
 
 Qt Creator can open `CMakeLists.txt` and use the `macos-debug` preset (Ninja, `CMAKE_BUILD_TYPE=Debug`). The same `QTDIR` is required. Run `QmlServer`, then debug `QmlBrowser`.
 
-A macOS window id is a pointer in one process, so the browser cannot place the page with `SetWindowPos`. The renderer is its own frameless window and follows the viewport through a `place` message. The custom caption, the native white-flash fill, and the resize-cursor reset stay Windows-only.
+A macOS window id is a pointer in one process, so the browser cannot place the page with `SetWindowPos`. The renderer is a frameless `Qt::Tool` window. `place` moves it in global logical pixels and passes `above`, the browser window's `NSWindow` number, so the page stacks over the browser. The renderer bundle is an agent (`LSUIElement`): no Dock icon per tab. It does not become the key window until the page is clicked, and after a show it activates the browser again. The custom caption, the native white-flash fill, and the resize-cursor reset stay Windows-only.
 
 The Node server also runs here, with Node.js 18 or newer and no packages:
 
@@ -155,7 +155,7 @@ node nodejs\server.js -public
 
 ## Writing a page
 
-A page is a `.qml` document whose root object is an `Item`. The browser sizes
+A page is a `.qml` document whose root object is an `Item`. The renderer sizes
 that root to the viewport.
 
 ```qml
@@ -197,7 +197,11 @@ component library. `server\wwwroot\shared\` is one.
 
 ```
 qt.props                  Qt paths, warning setup, output dirs; shared by all three projects
-QmlBrowser.sln
+QmlBrowser.sln             Windows solution
+build.bat                  msbuild Debug or Release, x64
+CMakeLists.txt             CMake build. Apple requires Qt 6.7; other platforms require Qt 6.10
+CMakePresets.json          macos-debug and macos-xcode, deployment target 11.0
+build-macos.sh             Xcode Debug build from QTDIR
 shared\
   IpcChannel.h/.cpp       newline-delimited JSON over QLocalSocket, used by both sides
 server\
@@ -210,7 +214,7 @@ server\
 client\                   QmlBrowser.exe — the browser window
   main.cpp                QGuiApplication, type registration, start URL
   WindowFrame.h/.cpp      custom caption: tab strip replaces the Windows title bar
-  TabManager.h/.cpp       QLocalServer, the tab list, native placement of child windows
+  TabManager.h/.cpp       QLocalServer, the tab list, child windows on Windows and place on macOS
   BrowserTab.h/.cpp       one renderer process: QProcess + IPC channel + history
   BrowserHistory.h/.cpp   back/forward stack and URL normalisation
   TabViewport.h/.cpp      the hole in the chrome where the active renderer sits
@@ -218,7 +222,8 @@ client\                   QmlBrowser.exe — the browser window
   ui\TabButton.qml ui\ToolButton.qml
   resources.qrc           chrome compiled into the exe via rcc
 renderer\                 QmlRenderer.exe — one instance per tab
-  main.cpp                QQuickView reparented into the browser window, IPC plumbing
+  main.cpp                child window on Windows, place/stacking on macOS, IPC plumbing
+  Info.plist.in           macOS agent bundle so a tab has no Dock icon
   PageView.h/.cpp         QQuickItem that downloads and instantiates remote QML
   ui\Renderer.qml         the page plus its loading spinner and error page
   resources.qrc
@@ -227,20 +232,25 @@ renderer\                 QmlRenderer.exe — one instance per tab
 ## How a tab works
 
 The browser process listens on a `QLocalServer` named `qmlbrowser-<pid>-<uuid>`.
-Opening a tab starts `QmlRenderer.exe --channel <name> --tab <id> --parent <winid>`.
-The renderer connects back, reparents its `QQuickView` into the browser window
-with `QWindow::fromWinId()` + `QWindow::setParent()`, and reports its own window
-handle in a `hello` message.
+Opening a tab starts `QmlRenderer --channel <name> --tab <id> --parent <winid>`.
+On Windows that executable is `QmlRenderer.exe`. On macOS it is
+`QmlRenderer.app`. The renderer connects back and reports its own window handle
+in a `hello` message, sent on the next event-loop turn so a macOS show is not
+swallowed by `waitForConnected`. On Windows it reparents its `QQuickView` into
+the browser window with `QWindow::fromWinId()` and `QWindow::setParent()`. On
+macOS `--parent` is ignored, because that id is a pointer in the browser
+process.
 
-From then on the two processes split the work along one line: **state travels
-over the socket, geometry does not.** The renderer pushes coalesced `state`,
-`source`, `navigate` and `fullscreen` messages; the browser replies with
-`navigate`, `reload`, `stop` and `chrome`. Placement and tab switching are done
-natively with `SetWindowPos`
-and `ShowWindow` on the renderer's window handle, so dragging the browser window
-never waits on a round trip. `TabViewport` recomputes that rectangle on
-`QQuickWindow::afterAnimating`, which is the only reliable signal that an
-anchored item's scene position has changed.
+From then on the two processes split the work along one line. The renderer
+pushes coalesced `state`, `source`, `navigate` and `fullscreen` messages; the
+browser replies with `navigate`, `reload`, `stop` and `chrome`. On Windows
+**geometry does not travel on the socket.** Placement and tab switching use
+`SetWindowPos` and `ShowWindow` on the renderer's window handle, so dragging
+the browser window never waits on a round trip. On macOS the same rectangle is
+sent as `place` (`visible`, `x`, `y`, `width`, `height`, `above`), because the
+renderer's window id is not valid in the browser process. `TabViewport`
+recomputes that rectangle on `QQuickWindow::afterAnimating`, which is the only
+reliable signal that an anchored item's scene position has changed.
 
 If a renderer exits for any reason, `BrowserTab` records the exit code and the
 tab shows a recovery page; **Reload tab** launches a fresh process into the same

@@ -14,8 +14,13 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # One Xcode scheme per target, with Debug as a run configuration.
 set(CMAKE_XCODE_GENERATE_SCHEME ON)
 
-# 6.8 and later need Xcode 15, which does not run on macOS 12.6.
-find_package(Qt6 6.7...<6.8 REQUIRED COMPONENTS Core Network Gui Qml Quick)
+# macOS 12.6 stops at Xcode 14.2, so that build stays on Qt 6.7.
+# Windows keeps the Qt 6.10 kit in qt.props.
+if(APPLE)
+    find_package(Qt6 6.7...<6.8 REQUIRED COMPONENTS Core Network Gui Qml Quick)
+else()
+    find_package(Qt6 6.10 REQUIRED COMPONENTS Core Network Gui Qml Quick)
+endif()
 
 if(APPLE)
     get_filename_component(QMLBROWSER_QT_PREFIX "${Qt6_DIR}/../../.." ABSOLUTE)
