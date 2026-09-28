@@ -2,8 +2,10 @@
 #include "PageView.h"
 
 #include <QAbstractNativeEventFilter>
+#include <QColor>
 #include <QCommandLineParser>
 #include <QGuiApplication>
+#include <QJsonObject>
 #include <QKeyEvent>
 #include <QLocalSocket>
 #include <QQmlContext>

@@ -1,4 +1,9 @@
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.22)
+
+# Built on macOS 12.6 with Xcode 14.2. Qt 6.7 is the newest kit that compiler
+# can use, and its own floor is macOS 11. Set before project() so the Apple
+# toolchain records it. Windows ignores the variable.
+set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version" FORCE)
 
 project(QmlBrowser VERSION 1.0 LANGUAGES CXX)
 
@@ -9,7 +14,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # One Xcode scheme per target, with Debug as a run configuration.
 set(CMAKE_XCODE_GENERATE_SCHEME ON)
 
-find_package(Qt6 6.2 REQUIRED COMPONENTS Core Network Gui Qml Quick)
+# 6.8 and later need Xcode 15, which does not run on macOS 12.6.
+find_package(Qt6 6.7...<6.8 REQUIRED COMPONENTS Core Network Gui Qml Quick)
 
 if(APPLE)
     get_filename_component(QMLBROWSER_QT_PREFIX "${Qt6_DIR}/../../.." ABSOLUTE)
@@ -70,7 +76,19 @@ if(APPLE)
         XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "-"
         XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED NO
     )
-    set_target_properties(QmlBrowser QmlRenderer QmlServer PROPERTIES ${_qmlbrowser_nosign})
+    # qt_add_executable does not create a bundle. The qt.conf copy and the
+    # renderer lookup both require QmlBrowser.app and QmlRenderer.app.
+    set_target_properties(QmlBrowser QmlRenderer PROPERTIES
+        MACOSX_BUNDLE TRUE
+        ${_qmlbrowser_nosign}
+        MACOSX_DEPLOYMENT_TARGET "${CMAKE_OSX_DEPLOYMENT_TARGET}"
+        XCODE_ATTRIBUTE_MACOSX_DEPLOYMENT_TARGET "${CMAKE_OSX_DEPLOYMENT_TARGET}"
+    )
+    set_target_properties(QmlServer PROPERTIES
+        ${_qmlbrowser_nosign}
+        MACOSX_DEPLOYMENT_TARGET "${CMAKE_OSX_DEPLOYMENT_TARGET}"
+        XCODE_ATTRIBUTE_MACOSX_DEPLOYMENT_TARGET "${CMAKE_OSX_DEPLOYMENT_TARGET}"
+    )
     set_target_properties(QmlBrowser PROPERTIES
         XCODE_SCHEME_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     )

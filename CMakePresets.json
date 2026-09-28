@@ -4,7 +4,7 @@
     {
       "name": "macos-debug",
       "displayName": "macOS Debug (Ninja)",
-      "description": "Debug build for Qt Creator. Set QTDIR to the Qt macOS kit first, for example $HOME/Qt/6.10.3/macos.",
+      "description": "Debug build for Qt Creator on macOS 12.6. Set QTDIR to the Qt 6.7 macOS kit first, for example $HOME/Qt/6.7.3/macos.",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/macos-debug",
       "condition": {
@@ -14,7 +14,8 @@
       },
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_PREFIX_PATH": "$env{QTDIR}"
+        "CMAKE_PREFIX_PATH": "$env{QTDIR}",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "11.0"
       }
     },
     {
@@ -29,7 +30,8 @@
         "rhs": "Darwin"
       },
       "cacheVariables": {
-        "CMAKE_PREFIX_PATH": "$env{QTDIR}"
+        "CMAKE_PREFIX_PATH": "$env{QTDIR}",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "11.0"
       }
     }
   ],

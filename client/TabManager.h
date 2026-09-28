@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QJsonObject>
 #include <QList>
 #include <QObject>
 #include <QRect>

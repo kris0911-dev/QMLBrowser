@@ -42,15 +42,14 @@ and `windeployqt` copies the Qt DLLs next to the executables. `build.bat` and
 
 ### macOS
 
-* macOS
-* Qt 6 for macOS, the same minor series as the Windows tree when you can (6.10). The kit directory is usually `$HOME/Qt/6.10.3/macos`
-* Xcode and its command-line tools
-* CMake 3.21 or newer on `PATH` (Qt Creator's CMake, or Homebrew)
+* macOS 12.6, with Xcode 14.2. That is the newest Xcode this release of macOS can run. The build sets `CMAKE_OSX_DEPLOYMENT_TARGET` to `11.0`, which is the oldest macOS Qt 6.7 itself runs on
+* Qt 6.7 for macOS. The kit directory is usually `$HOME/Qt/6.7.3/macos`. Qt 6.8 and later need Xcode 15, which does not install here
+* CMake 3.22 or newer on `PATH` (Qt Creator's CMake, or Homebrew)
 
 `build.bat` and `QmlBrowser.sln` stay the Windows build. On macOS, `CMakeLists.txt` produces a Debug Xcode project. Code signing is turned off so a local run does not need an Apple Developer team. Each app bundle gets a `qt.conf` that points at `QTDIR`, which is what lets the debugger start the Qt libraries.
 
 ```sh
-export QTDIR=$HOME/Qt/6.10.3/macos
+export QTDIR=$HOME/Qt/6.7.3/macos
 ./build-macos.sh
 open build/macos-xcode/QmlBrowser.xcodeproj
 ```

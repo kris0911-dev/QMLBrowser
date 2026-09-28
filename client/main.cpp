@@ -5,9 +5,13 @@
 #include "WindowFrame.h"
 
 #include <QGuiApplication>
+#include <QLatin1Char>
 #include <QQmlApplicationEngine>
-#include <QWindow>
 #include <QQmlContext>
+#include <QString>
+#include <QStringList>
+#include <QUrl>
+#include <QWindow>
 #include <QtQml/qqml.h>
 
 int main(int argc, char *argv[])

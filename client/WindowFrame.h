@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QAbstractNativeEventFilter>
+#include <QByteArray>
 #include <QRect>
 #include <QtGui/qwindowdefs.h>
 

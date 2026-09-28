@@ -50,10 +50,9 @@ There is no CMake and no qmake step. `moc` and `rcc` are MSBuild custom build st
 
 ### macOS
 
-- macOS
-- Qt 6 for macOS. Prefer the same minor series as the Windows tree (6.10). Point `QTDIR` at that kit, usually `$HOME/Qt/6.10.3/macos`.
-- Xcode and the Xcode command-line tools
-- CMake 3.21 or newer
+- macOS 12.6, with Xcode 14.2. That is the newest Xcode this release of macOS can run. `CMAKE_OSX_DEPLOYMENT_TARGET` is `11.0`, the oldest macOS Qt 6.7 itself runs on.
+- Qt 6.7 for macOS. Point `QTDIR` at that kit, usually `$HOME/Qt/6.7.3/macos`. Qt 6.8 and later need Xcode 15, which does not install here.
+- CMake 3.22 or newer
 
 `build.bat` and `QmlBrowser.sln` are the Windows build. `CMakeLists.txt` and `CMakePresets.json` are the macOS one. `./build-macos.sh` configures `build/macos-xcode` with the Xcode generator and compiles Debug. The generated schemes do not require a code-signing team. A `qt.conf` inside each bundle names `QTDIR`, so a Debug run from Xcode finds Qt.
 

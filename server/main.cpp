@@ -1,9 +1,12 @@
 #include "HttpServer.h"
 
+#include <QByteArray>
 #include <QCommandLineParser>
 #include <QCoreApplication>
 #include <QDir>
 #include <QHostAddress>
+#include <QLatin1String>
+#include <QString>
 #include <QTextStream>
 
 namespace {
