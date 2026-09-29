@@ -59,6 +59,8 @@ qt_add_executable(QmlBrowser
     client/BrowserHistory.h
     client/BrowserTab.cpp
     client/BrowserTab.h
+    client/RendererShutdown.cpp
+    client/RendererShutdown.h
     client/TabManager.cpp
     client/TabManager.h
     client/TabViewport.cpp

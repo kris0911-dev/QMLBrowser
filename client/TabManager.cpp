@@ -2,6 +2,7 @@
 
 #include "BrowserTab.h"
 #include "IpcChannel.h"
+#include "RendererShutdown.h"
 #include "WindowFrame.h"
 
 #include <QCoreApplication>
@@ -74,6 +75,10 @@ TabManager::TabManager(QObject *parent)
 
 TabManager::~TabManager()
 {
+    // One wait for every live and retiring renderer, before any ~QProcess.
+    // aboutToQuit normally arrives first; this also covers exiting main()
+    // without having entered the event loop.
+    RendererShutdown::shutdown();
     qDeleteAll(m_tabs);
     m_tabs.clear();
 }

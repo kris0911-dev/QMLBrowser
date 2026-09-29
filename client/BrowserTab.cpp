@@ -1,83 +1,13 @@
 #include "BrowserTab.h"
 
 #include "IpcChannel.h"
+#include "RendererShutdown.h"
 
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonObject>
 #include <QProcess>
-#include <QThread>
-#include <QTimer>
-
-namespace {
-
-// How long a renderer gets to shut itself down before it is killed outright.
-constexpr int kExitGraceMs = 2000;
-
-// Lets a renderer wind down without the browser's UI thread waiting on it.
-// Closing the channel is the request to exit; this only escalates if the
-// process is somehow still around afterwards.
-void retireProcess(QProcess *process)
-{
-    if (!process)
-        return;
-
-    process->disconnect();
-    process->setParent(QCoreApplication::instance());
-
-    const auto stopNow = [process] {
-        if (process->state() == QProcess::NotRunning)
-            return;
-        // The channel is already closed, which is the renderer's cue to quit.
-        // Kill it if that has not happened, so ~QProcess never runs while the
-        // child is still alive.
-        if (!process->waitForFinished(200)) {
-            process->kill();
-            process->waitForFinished(kExitGraceMs);
-        }
-    };
-
-    // Tabs are also torn down after the event loop has stopped, on the way out
-    // of main(). Nothing can deliver finished() or fire the grace timer by
-    // then, and ~QProcess would kill and wait without a timeout, so do it here.
-    const bool synchronous = QThread::currentThread()->loopLevel() == 0
-            || !QCoreApplication::instance()
-            || QCoreApplication::closingDown();
-    if (synchronous) {
-        stopNow();
-        delete process;
-        return;
-    }
-
-    if (process->state() == QProcess::NotRunning) {
-        process->deleteLater();
-        return;
-    }
-
-    QObject::connect(process, &QProcess::finished, process, &QObject::deleteLater);
-    // Closing the last tab quits the process while this QProcess is still a
-    // child of the application. aboutToQuit runs before that child is
-    // destroyed, which is the last chance to wait for the renderer. Drop the
-    // finished handler first: waitForFinished() runs a nested loop, and
-    // deleteLater from finished() would free this object mid-call.
-    QObject::connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit,
-                     process, [process] {
-        QObject::disconnect(process, &QProcess::finished, nullptr, nullptr);
-        if (process->state() == QProcess::NotRunning)
-            return;
-        if (!process->waitForFinished(200)) {
-            process->kill();
-            process->waitForFinished(kExitGraceMs);
-        }
-    });
-    QTimer::singleShot(kExitGraceMs, process, [process] {
-        if (process->state() != QProcess::NotRunning)
-            process->kill();
-    });
-}
-
-} // namespace
 
 BrowserTab::BrowserTab(int id, const QString &channelName, WId hostWindow, QObject *parent)
     : QObject(parent)
@@ -113,8 +43,11 @@ void BrowserTab::releaseRenderer()
     m_childWindow = 0;
     m_rendererPid = 0;
 
-    retireProcess(m_process);
+    // Hand the process to the shared shutdown list before clearing the pointer.
+    // Quit reaps every renderer in one wait; a single tab close does not block.
+    QProcess *process = m_process;
     m_process = nullptr;
+    RendererShutdown::retire(process);
 }
 
 QString BrowserTab::title() const
@@ -170,6 +103,7 @@ void BrowserTab::startProcess()
     const QString program = rendererExecutable();
 
     m_process = new QProcess(this);
+    RendererShutdown::watch(m_process);
     m_process->setProgram(program);
     m_process->setArguments({ QStringLiteral("--channel"), m_channelName,
                               QStringLiteral("--tab"), QString::number(m_id),
@@ -209,6 +143,7 @@ bool BrowserTab::isAttached() const
 void BrowserTab::attach(IpcChannel *channel, WId childWindow, qint64 pid)
 {
     m_channel = channel;
+    RendererShutdown::bindChannel(m_process, channel);
     m_childWindow = childWindow;
     m_rendererPid = pid;
     m_crashed = false;
