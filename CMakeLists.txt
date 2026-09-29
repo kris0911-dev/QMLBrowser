@@ -79,6 +79,12 @@ qt_add_executable(QmlRenderer
     renderer/resources.qrc
 )
 target_link_libraries(QmlRenderer PRIVATE qmlbrowser_ipc Qt6::Gui Qt6::Qml Qt6::Quick)
+if(UNIX AND NOT APPLE)
+    # X11 only. The macOS build keeps using AppKit and must not look for X11.
+    find_package(X11 REQUIRED)
+    target_link_libraries(QmlRenderer PRIVATE X11::X11)
+    target_compile_definitions(QmlRenderer PRIVATE QMLBROWSER_HAS_X11)
+endif()
 
 if(APPLE)
     # Local debugging does not need an Apple Developer team.

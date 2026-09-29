@@ -22,6 +22,19 @@
 #include <QTimer>
 #include <QWindow>
 
+#if defined(QMLBROWSER_HAS_X11)
+#include <qnativeinterface.h>
+// Xlib's None collides with Qt. Pull the declarations we need without that macro.
+#include <X11/Xlib.h>
+#undef None
+#undef KeyPress
+#undef KeyRelease
+#undef FocusIn
+#undef FocusOut
+#undef FontChange
+#undef Expose
+#endif
+
 #ifdef Q_OS_WIN
 #  define WIN32_LEAN_AND_MEAN
 #  define NOMINMAX
@@ -340,24 +353,49 @@ private:
 
 #ifndef Q_OS_MACOS
 // On X11 a window manager raises whichever window was just activated, so the
-// browser chrome covers the page. Mark the page transient for the browser and
-// raise it only while that browser window is the one the user is using, which
-// keeps the page above the chrome without pinning it above other applications.
+// browser chrome covers the page. WM_TRANSIENT_FOR asks the manager to keep
+// this window above that browser only, which does not pin it above other apps.
+// Qt::Tool's own transient owner is an internal helper, so set the hint directly.
 void keepPageAboveBrowser(QWindow *page, qulonglong browserId)
 {
-#if defined(Q_OS_LINUX)
+#if defined(QMLBROWSER_HAS_X11)
     if (page && browserId && QGuiApplication::platformName() == QLatin1String("xcb")) {
-        static QWindow *owner = nullptr;
-        static WId ownerId = 0;
-        const WId id = static_cast<WId>(browserId);
-        if (!owner || ownerId != id) {
-            if (owner) {
-                page->setTransientParent(nullptr);
-                delete owner;
+        auto *x11 = qApp->nativeInterface<QNativeInterface::QX11Application>();
+        Display *display = x11 ? x11->display() : nullptr;
+        if (display) {
+            const Window pageId = static_cast<Window>(page->winId());
+            const Window ownerId = static_cast<Window>(browserId);
+            XSetTransientForHint(display, pageId, ownerId);
+
+            // The window manager reparents each client, so the two top-level
+            // frames are the windows that can actually be restacked.
+            const auto frameOf = [display](Window window) {
+                Window current = window;
+                for (int i = 0; i < 8; ++i) {
+                    Window root = 0;
+                    Window parent = 0;
+                    Window *children = nullptr;
+                    unsigned count = 0;
+                    if (!XQueryTree(display, current, &root, &parent, &children, &count))
+                        break;
+                    if (children)
+                        XFree(children);
+                    if (parent == root || parent == 0)
+                        return current;
+                    current = parent;
+                }
+                return window;
+            };
+            const Window pageFrame = frameOf(pageId);
+            const Window ownerFrame = frameOf(ownerId);
+            if (pageFrame && ownerFrame && pageFrame != ownerFrame) {
+                XWindowChanges changes = {};
+                changes.sibling = ownerFrame;
+                changes.stack_mode = Above;
+                XConfigureWindow(display, pageFrame, CWSibling | CWStackMode, &changes);
             }
-            owner = QWindow::fromWinId(id);
-            ownerId = id;
-            page->setTransientParent(owner);
+            XFlush(display);
+            return;
         }
     }
 #else
