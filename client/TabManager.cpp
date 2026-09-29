@@ -2,6 +2,7 @@
 
 #include "BrowserTab.h"
 #include "IpcChannel.h"
+#include "RendererShutdown.h"
 #include "WindowFrame.h"
 
 #include <QCoreApplication>
@@ -74,6 +75,10 @@ TabManager::TabManager(QObject *parent)
 
 TabManager::~TabManager()
 {
+    // One wait for every live and retiring renderer, before any ~QProcess.
+    // aboutToQuit normally arrives first; this also covers exiting main()
+    // without having entered the event loop.
+    RendererShutdown::shutdown();
     qDeleteAll(m_tabs);
     m_tabs.clear();
 }
@@ -353,13 +358,31 @@ void TabManager::updatePlacement(bool force)
                        origin.y() + qRound(m_viewportRect.y() / ratio),
                        qRound(m_viewportRect.width() / ratio),
                        qRound(m_viewportRect.height() / ratio));
-    const int above = hostWindowNumber(host);
+    qint64 above = hostWindowNumber(host);
+#if defined(Q_OS_LINUX)
+    // X11 window ids are not macOS window numbers. The renderer uses this id
+    // as the transient owner so a window manager keeps the page with the browser.
+    if (host && QGuiApplication::platformName() == QLatin1String("xcb"))
+        above = static_cast<qint64>(static_cast<qulonglong>(host->winId()));
+
+    if (host && host != m_activationHost) {
+        m_activationHost = host;
+        connect(host, &QWindow::activeChanged, this, [this, host] {
+            if (host->isActive())
+                updatePlacement(true);
+        });
+    }
+    const bool raisePage = host && host->isActive();
+#else
+    const bool raisePage = false;
+#endif
 
     for (int i = 0; i < m_tabs.size(); ++i) {
         auto *tab = qobject_cast<BrowserTab *>(m_tabs.at(i));
         if (!tab || !tab->isAttached())
             continue;
-        tab->place(showCurrent && i == m_currentIndex, screen, above, force && i == m_currentIndex);
+        tab->place(showCurrent && i == m_currentIndex, screen, above,
+                   force && i == m_currentIndex, raisePage && i == m_currentIndex);
     }
 #endif
 }

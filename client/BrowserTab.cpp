@@ -1,54 +1,13 @@
 #include "BrowserTab.h"
 
 #include "IpcChannel.h"
+#include "RendererShutdown.h"
 
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonObject>
 #include <QProcess>
-#include <QThread>
-#include <QTimer>
-
-namespace {
-
-// How long a renderer gets to shut itself down before it is killed outright.
-constexpr int kExitGraceMs = 2000;
-
-// Lets a renderer wind down without the browser's UI thread waiting on it.
-// Closing the channel is the request to exit; this only escalates if the
-// process is somehow still around afterwards.
-void retireProcess(QProcess *process)
-{
-    if (!process)
-        return;
-
-    process->disconnect();
-    process->setParent(QCoreApplication::instance());
-
-    if (process->state() == QProcess::NotRunning) {
-        process->deleteLater();
-        return;
-    }
-
-    // Tabs are also torn down after the event loop has stopped, on the way out
-    // of main(). Nothing can deliver finished() or fire the grace timer by
-    // then, and ~QProcess would kill and wait without a timeout, so do it here.
-    if (QThread::currentThread()->loopLevel() == 0) {
-        process->kill();
-        process->waitForFinished(kExitGraceMs);
-        delete process;
-        return;
-    }
-
-    QObject::connect(process, &QProcess::finished, process, &QObject::deleteLater);
-    QTimer::singleShot(kExitGraceMs, process, [process] {
-        if (process->state() != QProcess::NotRunning)
-            process->kill();
-    });
-}
-
-} // namespace
 
 BrowserTab::BrowserTab(int id, const QString &channelName, WId hostWindow, QObject *parent)
     : QObject(parent)
@@ -84,8 +43,11 @@ void BrowserTab::releaseRenderer()
     m_childWindow = 0;
     m_rendererPid = 0;
 
-    retireProcess(m_process);
+    // Hand the process to the shared shutdown list before clearing the pointer.
+    // Quit reaps every renderer in one wait; a single tab close does not block.
+    QProcess *process = m_process;
     m_process = nullptr;
+    RendererShutdown::retire(process);
 }
 
 QString BrowserTab::title() const
@@ -141,6 +103,7 @@ void BrowserTab::startProcess()
     const QString program = rendererExecutable();
 
     m_process = new QProcess(this);
+    RendererShutdown::watch(m_process);
     m_process->setProgram(program);
     m_process->setArguments({ QStringLiteral("--channel"), m_channelName,
                               QStringLiteral("--tab"), QString::number(m_id),
@@ -180,6 +143,7 @@ bool BrowserTab::isAttached() const
 void BrowserTab::attach(IpcChannel *channel, WId childWindow, qint64 pid)
 {
     m_channel = channel;
+    RendererShutdown::bindChannel(m_process, channel);
     m_childWindow = childWindow;
     m_rendererPid = pid;
     m_crashed = false;
@@ -214,17 +178,19 @@ void BrowserTab::setChromeHidden(bool hidden)
     sendChromeState();
 }
 
-void BrowserTab::place(bool visible, const QRect &screenRect, int aboveWindow, bool force)
+void BrowserTab::place(bool visible, const QRect &screenRect, qint64 aboveWindow, bool force,
+                       bool raisePage)
 {
     if (!m_channel)
         return;
     if (!force && visible == m_placedVisible && screenRect == m_placedRect
-            && aboveWindow == m_aboveWindow)
+            && aboveWindow == m_aboveWindow && raisePage == m_raisePage)
         return;
 
     m_placedVisible = visible;
     m_placedRect = screenRect;
     m_aboveWindow = aboveWindow;
+    m_raisePage = raisePage;
 
     QJsonObject message;
     message.insert(QStringLiteral("type"), QStringLiteral("place"));
@@ -233,7 +199,10 @@ void BrowserTab::place(bool visible, const QRect &screenRect, int aboveWindow, b
     message.insert(QStringLiteral("y"), screenRect.y());
     message.insert(QStringLiteral("width"), screenRect.width());
     message.insert(QStringLiteral("height"), screenRect.height());
-    message.insert(QStringLiteral("above"), aboveWindow);
+    // A double keeps an X11 window id intact. JSON integers are 32-bit, and a
+    // window id can have the high bit set. macOS window numbers still fit.
+    message.insert(QStringLiteral("above"), static_cast<double>(aboveWindow));
+    message.insert(QStringLiteral("raise"), raisePage);
     m_channel->send(message);
 }
 

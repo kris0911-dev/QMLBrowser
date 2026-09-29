@@ -22,6 +22,19 @@
 #include <QTimer>
 #include <QWindow>
 
+#if defined(QMLBROWSER_HAS_X11)
+#include <qnativeinterface.h>
+// Xlib's None collides with Qt. Pull the declarations we need without that macro.
+#include <X11/Xlib.h>
+#undef None
+#undef KeyPress
+#undef KeyRelease
+#undef FocusIn
+#undef FocusOut
+#undef FontChange
+#undef Expose
+#endif
+
 #ifdef Q_OS_WIN
 #  define WIN32_LEAN_AND_MEAN
 #  define NOMINMAX
@@ -338,6 +351,61 @@ private:
     QWindow *m_window = nullptr;
 };
 
+#ifndef Q_OS_MACOS
+// On X11 a window manager raises whichever window was just activated, so the
+// browser chrome covers the page. WM_TRANSIENT_FOR asks the manager to keep
+// this window above that browser only, which does not pin it above other apps.
+// Qt::Tool's own transient owner is an internal helper, so set the hint directly.
+void keepPageAboveBrowser(QWindow *page, qulonglong browserId)
+{
+#if defined(QMLBROWSER_HAS_X11)
+    if (page && browserId && QGuiApplication::platformName() == QLatin1String("xcb")) {
+        auto *x11 = qApp->nativeInterface<QNativeInterface::QX11Application>();
+        Display *display = x11 ? x11->display() : nullptr;
+        if (display) {
+            const Window pageId = static_cast<Window>(page->winId());
+            const Window ownerId = static_cast<Window>(browserId);
+            XSetTransientForHint(display, pageId, ownerId);
+
+            // The window manager reparents each client, so the two top-level
+            // frames are the windows that can actually be restacked.
+            const auto frameOf = [display](Window window) {
+                Window current = window;
+                for (int i = 0; i < 8; ++i) {
+                    Window root = 0;
+                    Window parent = 0;
+                    Window *children = nullptr;
+                    unsigned count = 0;
+                    if (!XQueryTree(display, current, &root, &parent, &children, &count))
+                        break;
+                    if (children)
+                        XFree(children);
+                    if (parent == root || parent == 0)
+                        return current;
+                    current = parent;
+                }
+                return window;
+            };
+            const Window pageFrame = frameOf(pageId);
+            const Window ownerFrame = frameOf(ownerId);
+            if (pageFrame && ownerFrame && pageFrame != ownerFrame) {
+                XWindowChanges changes = {};
+                changes.sibling = ownerFrame;
+                changes.stack_mode = Above;
+                XConfigureWindow(display, pageFrame, CWSibling | CWStackMode, &changes);
+            }
+            XFlush(display);
+            return;
+        }
+    }
+#else
+    Q_UNUSED(browserId)
+#endif
+    if (page)
+        page->raise();
+}
+#endif
+
 // Collapses the page state into the single message the browser process needs
 // in order to paint the tab strip, address bar and status line.
 QJsonObject stateMessage(PageView *page)
@@ -521,7 +589,12 @@ int main(int argc, char *argv[])
                                  });
                              }
 #else
-                             view.raise();
+                             const bool raise = wasHidden || message.value(QStringLiteral("raise")).toBool();
+                             if (raise) {
+                                 const qulonglong above = static_cast<qulonglong>(
+                                         message.value(QStringLiteral("above")).toDouble());
+                                 keepPageAboveBrowser(&view, above);
+                             }
 #endif
                          } else if (type == QLatin1String("navigate")) {
                              page->setUrl(QUrl(message.value(QStringLiteral("url")).toString()));

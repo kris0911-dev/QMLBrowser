@@ -50,10 +50,49 @@ QByteArray contentTypeFor(const QString &suffix)
 
 QString qmlEscape(const QString &text)
 {
-    QString out = text;
-    out.replace(QLatin1Char('\\'), QLatin1String("\\\\"));
-    out.replace(QLatin1Char('"'), QLatin1String("\\\""));
+    // Listings are generated source. A raw newline, quote or other control
+    // character in a file name would split the string or fail to compile.
+    QString out;
+    out.reserve(text.size());
+    for (const QChar ch : text) {
+        const char16_t u = ch.unicode();
+        switch (u) {
+        case '\\': out += QLatin1String("\\\\"); break;
+        case '"': out += QLatin1String("\\\""); break;
+        case '\n': out += QLatin1String("\\n"); break;
+        case '\r': out += QLatin1String("\\r"); break;
+        case '\t': out += QLatin1String("\\t"); break;
+        default:
+            if (u < 0x20 || u == 0x7f || u == 0x2028 || u == 0x2029) {
+                out += QLatin1String("\\u");
+                out += QString::number(u, 16).rightJustified(4, QLatin1Char('0'));
+            } else {
+                out += ch;
+            }
+            break;
+        }
+    }
     return out;
+}
+
+// canonicalFilePath() follows symlinks. The lexical ".." check does not, so a
+// link inside the root can still point at a file outside it.
+bool withinRoot(const QString &rootCanonical, const QString &pathCanonical)
+{
+    const QString root = QDir::fromNativeSeparators(QDir::cleanPath(rootCanonical));
+    const QString path = QDir::fromNativeSeparators(QDir::cleanPath(pathCanonical));
+    if (root.isEmpty() || path.isEmpty())
+        return false;
+
+#ifdef Q_OS_WIN
+    const Qt::CaseSensitivity cs = Qt::CaseInsensitive;
+#else
+    const Qt::CaseSensitivity cs = Qt::CaseSensitive;
+#endif
+    if (QString::compare(path, root, cs) == 0)
+        return true;
+    const QString prefix = root.endsWith(QLatin1Char('/')) ? root : root + QLatin1Char('/');
+    return path.startsWith(prefix, cs);
 }
 
 // Builds the QML document used for error pages and directory listings so that
@@ -216,6 +255,15 @@ bool HttpServer::dispatch(QTcpSocket *socket, const Request &request)
     }
 
     const QFileInfo info(absolute);
+    const QString rootCanonical = QFileInfo(m_root.absolutePath()).canonicalFilePath();
+    if (!rootCanonical.isEmpty() && (info.exists() || info.isSymLink())) {
+        const QString canonical = info.canonicalFilePath();
+        if (!canonical.isEmpty() && !withinRoot(rootCanonical, canonical)) {
+            sendError(socket, request, 403, QStringLiteral("Outside of the document root."));
+            return true;
+        }
+    }
+
     if (info.isDir()) {
         serveDirectory(socket, request, path, QDir(absolute));
         return true;
@@ -248,6 +296,14 @@ void HttpServer::serveFile(QTcpSocket *socket, const Request &request, const QSt
 void HttpServer::serveDirectory(QTcpSocket *socket, const Request &request, const QString &path,
                                 const QDir &dir)
 {
+    // entryInfoList() returns an empty list when the directory cannot be read,
+    // which would otherwise look like a successful empty listing.
+    if (!dir.isReadable()) {
+        sendError(socket, request, 500,
+                  QStringLiteral("Cannot read %1").arg(dir.dirName()));
+        return;
+    }
+
     // A directory serves its index.qml when there is one, exactly like a web
     // server serving index.html.
     if (dir.exists(QStringLiteral("index.qml"))) {

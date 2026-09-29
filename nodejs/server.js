@@ -56,7 +56,20 @@ function contentTypeFor(suffix) {
 }
 
 function qmlEscape(text) {
-    return String(text).replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
+    // Same escapes as HttpServer.cpp: a file name is pasted into a QML string.
+    return String(text).replace(/[\\\u0000-\u001f\u007f\u2028\u2029"]/g, (ch) => {
+        switch (ch) {
+        case "\\": return "\\\\";
+        case "\"": return "\\\"";
+        case "\n": return "\\n";
+        case "\r": return "\\r";
+        case "\t": return "\\t";
+        default: {
+            const hex = ch.charCodeAt(0).toString(16).padStart(4, "0");
+            return "\\u" + hex;
+        }
+        }
+    });
 }
 
 function qmlPage(title, heading, accent, body) {
@@ -424,6 +437,32 @@ function dispatch(socket, request, root) {
     const absolute = path.resolve(root, relative);
     const fromRoot = path.relative(root, absolute);
     if (fromRoot.startsWith("..") || path.isAbsolute(fromRoot)) {
+        sendError(socket, request, 403, "Outside of the document root.");
+        return true;
+    }
+
+    // path.resolve does not follow links. realpath does, so a symlink that
+    // stays lexically inside the root cannot point at a file outside it.
+    let rootReal;
+    try {
+        rootReal = fs.realpathSync(root);
+    } catch (error) {
+        sendError(socket, request, 500, `Cannot read ${path.basename(root)}`);
+        return true;
+    }
+    let targetReal;
+    try {
+        targetReal = fs.realpathSync(absolute);
+    } catch (error) {
+        if (error.code === "ENOENT") {
+            sendError(socket, request, 404, `The server has no document at ${urlPath}`);
+            return true;
+        }
+        sendError(socket, request, 500, `Cannot read ${path.basename(absolute)}`);
+        return true;
+    }
+    const fromReal = path.relative(rootReal, targetReal);
+    if (fromReal.startsWith("..") || path.isAbsolute(fromReal)) {
         sendError(socket, request, 403, "Outside of the document root.");
         return true;
     }

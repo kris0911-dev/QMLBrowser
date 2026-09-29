@@ -10,6 +10,68 @@
 #include <QQmlError>
 #include <QQmlProperty>
 
+namespace {
+
+// Directory listings and error pages from QmlServer are text/x-qml. Anything
+// else (a .txt file, an image, JSON) must not be handed to the QML compiler.
+bool isQmlContentType(const QString &contentType, const QUrl &url)
+{
+    const QString mime = contentType.section(QLatin1Char(';'), 0, 0).trimmed().toLower();
+    if (mime == QLatin1String("text/x-qml") || mime == QLatin1String("application/qml")
+            || mime == QLatin1String("text/qml"))
+        return true;
+    if (!mime.isEmpty())
+        return false;
+    const QString path = url.path();
+    return path.endsWith(QLatin1String(".qml"), Qt::CaseInsensitive);
+}
+
+bool isTextualContentType(const QString &contentType)
+{
+    const QString mime = contentType.section(QLatin1Char(';'), 0, 0).trimmed().toLower();
+    if (mime.isEmpty() || mime.startsWith(QLatin1String("text/")))
+        return true;
+    return mime == QLatin1String("application/json")
+            || mime == QLatin1String("application/javascript")
+            || mime == QLatin1String("application/xml")
+            || mime == QLatin1String("image/svg+xml")
+            || mime.endsWith(QLatin1String("+json"))
+            || mime.endsWith(QLatin1String("+xml"));
+}
+
+QByteArray plainTextDocument()
+{
+    return QByteArrayLiteral(
+            "import QtQuick\n"
+            "\n"
+            "Rectangle {\n"
+            "    property string title: documentTitle\n"
+            "    color: \"#11131a\"\n"
+            "    Flickable {\n"
+            "        id: flick\n"
+            "        anchors.fill: parent\n"
+            "        anchors.margins: 28\n"
+            "        clip: true\n"
+            "        boundsBehavior: Flickable.StopAtBounds\n"
+            "        contentWidth: Math.max(width, body.implicitWidth)\n"
+            "        contentHeight: body.implicitHeight\n"
+            "        TextEdit {\n"
+            "            id: body\n"
+            "            width: Math.max(implicitWidth, flick.width)\n"
+            "            text: documentText\n"
+            "            readOnly: true\n"
+            "            selectByMouse: true\n"
+            "            color: \"#d7deee\"\n"
+            "            font.pixelSize: 15\n"
+            "            font.family: \"monospace\"\n"
+            "            wrapMode: TextEdit.NoWrap\n"
+            "        }\n"
+            "    }\n"
+            "}\n");
+}
+
+} // namespace
+
 #include <cstdlib>
 
 PageView::PageView(QQuickItem *parent)
@@ -141,12 +203,34 @@ void PageView::onReplyFinished()
     }
 
     setProgress(1.0);
-    instantiate(body);
+
+    const QString contentType = reply->header(QNetworkRequest::ContentTypeHeader).toString();
+    if (!isQmlContentType(contentType, m_url)) {
+        m_sourceText = QString::fromUtf8(body);
+        QString shown = m_sourceText;
+        if (!isTextualContentType(contentType)) {
+            const QString mime = contentType.section(QLatin1Char(';'), 0, 0).trimmed();
+            shown = QStringLiteral("This response is not a QML document.\n\nContent-Type: %1\nSize: %2 bytes")
+                            .arg(mime.isEmpty() ? QStringLiteral("(none)") : mime)
+                            .arg(body.size());
+        }
+        m_documentText = shown;
+        m_documentTitle = m_url.fileName().isEmpty() ? m_url.toString() : m_url.fileName();
+        instantiate(plainTextDocument(), true);
+        return;
+    }
+
+    instantiate(body, false);
 }
 
-void PageView::instantiate(const QByteArray &source)
+void PageView::instantiate(const QByteArray &source, bool plainText)
 {
-    m_sourceText = QString::fromUtf8(source);
+    if (!plainText) {
+        m_sourceText = QString::fromUtf8(source);
+        m_documentText.clear();
+        m_documentTitle.clear();
+    }
+    m_plainText = plainText;
     emit sourceTextChanged();
 
     QQmlEngine *engine = qmlEngine(this);
@@ -159,8 +243,9 @@ void PageView::instantiate(const QByteArray &source)
     m_component = new QQmlComponent(engine, this);
 
     // Passing the document URL makes relative images, imports and qmldir
-    // lookups resolve back to the server it came from.
-    m_component->setData(source, m_url);
+    // lookups resolve back to the server it came from. A plain-text wrapper is
+    // local and must not resolve against the text file's URL.
+    m_component->setData(source, plainText ? QUrl() : m_url);
 
     if (m_component->isLoading()) {
         connect(m_component, &QQmlComponent::statusChanged, this,
@@ -193,6 +278,10 @@ void PageView::onComponentReady()
     // clobber) anything belonging to the browser chrome.
     auto *context = new QQmlContext(qmlContext(this), this);
     context->setContextProperty(QStringLiteral("browser"), this);
+    if (m_plainText) {
+        context->setContextProperty(QStringLiteral("documentText"), m_documentText);
+        context->setContextProperty(QStringLiteral("documentTitle"), m_documentTitle);
+    }
 
     QObject *object = m_component->beginCreate(context);
     auto *item = qobject_cast<QQuickItem *>(object);
