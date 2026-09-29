@@ -1,0 +1,8 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/">
+        <file>ui/Browser.qml</file>
+        <file>ui/ToolButton.qml</file>
+        <file>ui/TabButton.qml</file>
+    </qresource>
+</RCC>

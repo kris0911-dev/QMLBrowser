@@ -1,0 +1,12 @@
+{
+  "name": "qmlserver",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Node.js QmlServer. Same HTTP behavior as the Qt server in ../server.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

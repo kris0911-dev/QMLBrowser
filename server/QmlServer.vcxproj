@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840001}</ProjectGuid>
+    <RootNamespace>QmlServer</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <!-- Whichever toolset this Visual Studio ships: v143 on 2022, v145 on 2026. -->
+    <PlatformToolset>$(DefaultPlatformToolset)</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+    <UseDebugLibraries Condition="'$(Configuration)' == 'Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)' != 'Debug'">false</UseDebugLibraries>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props"
+            Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')"
+            Label="LocalAppDataPlatform" />
+    <Import Project="$(MSBuildThisFileDirectory)..\qt.props" />
+  </ImportGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(QtInclude)\QtCore;$(QtInclude)\QtNetwork;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <AdditionalDependencies>Qt6Core$(QtLibSuffix).lib;Qt6Network$(QtLibSuffix).lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="HttpServer.cpp" />
+    <!-- Produced by the moc step below; it exists by the time cl.exe runs. -->
+    <ClCompile Include="$(QtGenDir)moc_HttpServer.cpp" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Headers containing Q_OBJECT must be run through the meta-object compiler. -->
+    <CustomBuild Include="HttpServer.h">
+      <Message>moc %(Filename)%(Extension)</Message>
+      <Command>if not exist "$(QtGenDir)" mkdir "$(QtGenDir)"
+"$(QtBin)\moc.exe" "%(FullPath)" -o "$(QtGenDir)moc_%(Filename).cpp" -f"%(Filename)%(Extension)"</Command>
+      <Outputs>$(QtGenDir)moc_%(Filename).cpp</Outputs>
+      <AdditionalInputs>$(QtBin)\moc.exe</AdditionalInputs>
+    </CustomBuild>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="wwwroot\index.qml" />
+    <None Include="wwwroot\about.qml" />
+    <None Include="wwwroot\gallery.qml" />
+    <None Include="wwwroot\docs.qml" />
+    <None Include="wwwroot\shared\qmldir" />
+    <None Include="wwwroot\shared\Page.qml" />
+    <None Include="wwwroot\shared\Card.qml" />
+    <None Include="wwwroot\shared\NavLink.qml" />
+    <None Include="wwwroot\assets\logo.svg" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+
+  <Target Name="DeployQtRuntime" AfterTargets="Link">
+    <Exec Condition="!Exists('$(OutDir)qtdeploy_server.stamp')"
+          Command="&quot;$(QtBin)\windeployqt.exe&quot; --no-translations --no-compiler-runtime --no-system-d3d-compiler &quot;$(TargetPath)&quot;" />
+    <Touch Files="$(OutDir)qtdeploy_server.stamp" AlwaysCreate="true" />
+  </Target>
+
+</Project>
