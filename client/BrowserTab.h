@@ -73,8 +73,12 @@ public:
 
     // macOS cannot SetWindowPos a window that belongs to another process, so the
     // renderer moves its own window. screenRect is in global logical pixels.
-    // aboveWindow is the browser's macOS window number. Zero elsewhere.
-    void place(bool visible, const QRect &screenRect, int aboveWindow = 0, bool force = false);
+    // aboveWindow is the browser's macOS window number, or on X11 its native
+    // window id. Zero when the platform does not stack the page that way.
+    // raisePage asks the renderer to restack above the browser. Geometry-only
+    // updates leave the stacking order alone.
+    void place(bool visible, const QRect &screenRect, qint64 aboveWindow = 0, bool force = false,
+               bool raisePage = false);
 
     void navigateTo(const QUrl &url);
     Q_INVOKABLE void navigateToText(const QString &text);
@@ -128,5 +132,6 @@ private:
     bool m_chromeHidden = false;
     bool m_placedVisible = false;
     QRect m_placedRect;
-    int m_aboveWindow = 0;
+    qint64 m_aboveWindow = 0;
+    bool m_raisePage = false;
 };

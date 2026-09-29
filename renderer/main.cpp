@@ -338,6 +338,36 @@ private:
     QWindow *m_window = nullptr;
 };
 
+#ifndef Q_OS_MACOS
+// On X11 a window manager raises whichever window was just activated, so the
+// browser chrome covers the page. Mark the page transient for the browser and
+// raise it only while that browser window is the one the user is using, which
+// keeps the page above the chrome without pinning it above other applications.
+void keepPageAboveBrowser(QWindow *page, qulonglong browserId)
+{
+#if defined(Q_OS_LINUX)
+    if (page && browserId && QGuiApplication::platformName() == QLatin1String("xcb")) {
+        static QWindow *owner = nullptr;
+        static WId ownerId = 0;
+        const WId id = static_cast<WId>(browserId);
+        if (!owner || ownerId != id) {
+            if (owner) {
+                page->setTransientParent(nullptr);
+                delete owner;
+            }
+            owner = QWindow::fromWinId(id);
+            ownerId = id;
+            page->setTransientParent(owner);
+        }
+    }
+#else
+    Q_UNUSED(browserId)
+#endif
+    if (page)
+        page->raise();
+}
+#endif
+
 // Collapses the page state into the single message the browser process needs
 // in order to paint the tab strip, address bar and status line.
 QJsonObject stateMessage(PageView *page)
@@ -521,7 +551,12 @@ int main(int argc, char *argv[])
                                  });
                              }
 #else
-                             view.raise();
+                             const bool raise = wasHidden || message.value(QStringLiteral("raise")).toBool();
+                             if (raise) {
+                                 const qulonglong above = static_cast<qulonglong>(
+                                         message.value(QStringLiteral("above")).toDouble());
+                                 keepPageAboveBrowser(&view, above);
+                             }
 #endif
                          } else if (type == QLatin1String("navigate")) {
                              page->setUrl(QUrl(message.value(QStringLiteral("url")).toString()));

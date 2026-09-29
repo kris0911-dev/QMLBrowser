@@ -26,22 +26,51 @@ void retireProcess(QProcess *process)
     process->disconnect();
     process->setParent(QCoreApplication::instance());
 
+    const auto stopNow = [process] {
+        if (process->state() == QProcess::NotRunning)
+            return;
+        // The channel is already closed, which is the renderer's cue to quit.
+        // Kill it if that has not happened, so ~QProcess never runs while the
+        // child is still alive.
+        if (!process->waitForFinished(200)) {
+            process->kill();
+            process->waitForFinished(kExitGraceMs);
+        }
+    };
+
+    // Tabs are also torn down after the event loop has stopped, on the way out
+    // of main(). Nothing can deliver finished() or fire the grace timer by
+    // then, and ~QProcess would kill and wait without a timeout, so do it here.
+    const bool synchronous = QThread::currentThread()->loopLevel() == 0
+            || !QCoreApplication::instance()
+            || QCoreApplication::closingDown();
+    if (synchronous) {
+        stopNow();
+        delete process;
+        return;
+    }
+
     if (process->state() == QProcess::NotRunning) {
         process->deleteLater();
         return;
     }
 
-    // Tabs are also torn down after the event loop has stopped, on the way out
-    // of main(). Nothing can deliver finished() or fire the grace timer by
-    // then, and ~QProcess would kill and wait without a timeout, so do it here.
-    if (QThread::currentThread()->loopLevel() == 0) {
-        process->kill();
-        process->waitForFinished(kExitGraceMs);
-        delete process;
-        return;
-    }
-
     QObject::connect(process, &QProcess::finished, process, &QObject::deleteLater);
+    // Closing the last tab quits the process while this QProcess is still a
+    // child of the application. aboutToQuit runs before that child is
+    // destroyed, which is the last chance to wait for the renderer. Drop the
+    // finished handler first: waitForFinished() runs a nested loop, and
+    // deleteLater from finished() would free this object mid-call.
+    QObject::connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit,
+                     process, [process] {
+        QObject::disconnect(process, &QProcess::finished, nullptr, nullptr);
+        if (process->state() == QProcess::NotRunning)
+            return;
+        if (!process->waitForFinished(200)) {
+            process->kill();
+            process->waitForFinished(kExitGraceMs);
+        }
+    });
     QTimer::singleShot(kExitGraceMs, process, [process] {
         if (process->state() != QProcess::NotRunning)
             process->kill();
@@ -214,17 +243,19 @@ void BrowserTab::setChromeHidden(bool hidden)
     sendChromeState();
 }
 
-void BrowserTab::place(bool visible, const QRect &screenRect, int aboveWindow, bool force)
+void BrowserTab::place(bool visible, const QRect &screenRect, qint64 aboveWindow, bool force,
+                       bool raisePage)
 {
     if (!m_channel)
         return;
     if (!force && visible == m_placedVisible && screenRect == m_placedRect
-            && aboveWindow == m_aboveWindow)
+            && aboveWindow == m_aboveWindow && raisePage == m_raisePage)
         return;
 
     m_placedVisible = visible;
     m_placedRect = screenRect;
     m_aboveWindow = aboveWindow;
+    m_raisePage = raisePage;
 
     QJsonObject message;
     message.insert(QStringLiteral("type"), QStringLiteral("place"));
@@ -233,7 +264,10 @@ void BrowserTab::place(bool visible, const QRect &screenRect, int aboveWindow, b
     message.insert(QStringLiteral("y"), screenRect.y());
     message.insert(QStringLiteral("width"), screenRect.width());
     message.insert(QStringLiteral("height"), screenRect.height());
-    message.insert(QStringLiteral("above"), aboveWindow);
+    // A double keeps an X11 window id intact. JSON integers are 32-bit, and a
+    // window id can have the high bit set. macOS window numbers still fit.
+    message.insert(QStringLiteral("above"), static_cast<double>(aboveWindow));
+    message.insert(QStringLiteral("raise"), raisePage);
     m_channel->send(message);
 }
 

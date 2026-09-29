@@ -3,6 +3,7 @@
 #include <QJsonObject>
 #include <QList>
 #include <QObject>
+#include <QPointer>
 #include <QRect>
 #include <QStringList>
 #include <QWindow>
@@ -101,6 +102,10 @@ private:
     int m_nextTabId = 1;
 
     WId m_hostWindow = 0;
+#if defined(Q_OS_LINUX)
+    // Restack the page when the window manager raises the browser.
+    QPointer<QWindow> m_activationHost;
+#endif
     QRect m_viewportRect;
     QString m_homeUrl;
     QStringList m_pendingUrls;

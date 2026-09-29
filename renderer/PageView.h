@@ -82,7 +82,7 @@ private slots:
 private:
     void load();
     void onReplyFinished();
-    void instantiate(const QByteArray &source);
+    void instantiate(const QByteArray &source, bool plainText);
     void onComponentReady();
     void fail(const QString &message);
     void clearContent();
@@ -96,6 +96,11 @@ private:
     QString m_errorString;
     QString m_sourceText;
     QString m_pageTitle;
+    // Set when the response is shown as text instead of compiled as QML.
+    // documentText / documentTitle are injected into that document's context.
+    bool m_plainText = false;
+    QString m_documentText;
+    QString m_documentTitle;
 
     QNetworkAccessManager *m_network = nullptr;
     QPointer<QNetworkReply> m_reply;

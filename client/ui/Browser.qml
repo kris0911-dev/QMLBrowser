@@ -27,7 +27,7 @@ Window {
     // have moved on and a maximised window would come back merely restored.
     property int windowedVisibility: Window.Windowed
 
-    onVisibilityChanged: {
+    onVisibilityChanged: function (visibility) {
         if (visibility === Window.Windowed || visibility === Window.Maximized)
             windowedVisibility = visibility;
         Qt.callLater(updateCaptionDrag);
