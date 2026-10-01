@@ -53,6 +53,7 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="BrowserHistory.cpp" />
     <ClCompile Include="BrowserTab.cpp" />
+    <ClCompile Include="RendererShutdown.cpp" />
     <ClCompile Include="TabManager.cpp" />
     <ClCompile Include="TabViewport.cpp" />
     <ClCompile Include="WindowFrame.cpp" />
