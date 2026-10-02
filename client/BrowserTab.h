@@ -98,6 +98,9 @@ signals:
     void shortcutRequested(const QString &key);
     // The page called browser.setFullScreen().
     void fullScreenRequested(bool on);
+    // macOS: the page was clicked while another app was in front, which
+    // brought only the page's own window forward. pageWindow is its number.
+    void pagePressed(qint64 pageWindow);
 
 private:
     void startProcess();

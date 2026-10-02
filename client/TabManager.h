@@ -8,12 +8,16 @@
 #include <QStringList>
 #include <QWindow>
 
+#include <optional>
+
 // The currentTab property exposes BrowserTab to the meta-object system, which
 // needs the complete type rather than a forward declaration.
 #include "BrowserTab.h"
 
 QT_BEGIN_NAMESPACE
+class QAbstractNativeEventFilter;
 class QLocalServer;
+class QTimer;
 QT_END_NAMESPACE
 
 class IpcChannel;
@@ -92,7 +96,13 @@ private:
     void onNewConnection();
     void onHello(IpcChannel *channel, const QJsonObject &message);
     BrowserTab *tabById(int id) const;
+    QWindow *hostWindow() const;
     void updatePlacement(bool force = false);
+#ifdef Q_OS_MACOS
+    void beginTitleBarDrag();
+    void followTitleBarDrag();
+    void followPageForward(qint64 pageWindow);
+#endif
 
     QLocalServer *m_server = nullptr;
     QString m_channelName;
@@ -102,9 +112,24 @@ private:
     int m_nextTabId = 1;
 
     WId m_hostWindow = 0;
-#if defined(Q_OS_LINUX)
-    // Restack the page when the window manager raises the browser.
-    QPointer<QWindow> m_activationHost;
+#ifndef Q_OS_WIN
+    // The browser window whose move, screen and activation signals are hooked.
+    // The page is a separate top-level window here, so it has to be told when
+    // the browser moves; nothing is repainted that would report it otherwise.
+    QPointer<QWindow> m_trackedHost;
+#endif
+#ifdef Q_OS_MACOS
+    // AppKit tells the browser about a window drag in batches, a few hundred
+    // milliseconds behind the screen. While the title bar is held, the page is
+    // placed where the pointer has taken the window instead.
+    QAbstractNativeEventFilter *m_mouseDownFilter = nullptr;
+    QTimer *m_dragFollow = nullptr;
+    QTimer *m_dropPrediction = nullptr;
+    QPoint m_dragStartCursor;
+    QPoint m_dragStartFrame;
+    // Top-left of the browser frame, in global points, while it is ahead of
+    // what QWindow reports.
+    std::optional<QPoint> m_predictedFrame;
 #endif
     QRect m_viewportRect;
     QString m_homeUrl;

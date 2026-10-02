@@ -14,6 +14,11 @@
 #include <QWindow>
 
 #ifdef Q_OS_MACOS
+#  include <QAbstractNativeEventFilter>
+#  include <QCursor>
+#  include <QScreen>
+#  include <QTimer>
+#  include <functional>
 #  include <objc/message.h>
 #  include <objc/runtime.h>
 #endif
@@ -52,6 +57,41 @@ void hideChild(WId child)
 #endif
 }
 
+#ifdef Q_OS_MACOS
+// Sees every left button press the browser receives, the title bar included.
+// A title bar press never becomes a QMouseEvent, but it is where a drag starts.
+// It runs before AppKit hands the press on, so the cursor is still where the
+// press happened.
+class MouseDownFilter : public QAbstractNativeEventFilter
+{
+public:
+    explicit MouseDownFilter(std::function<void()> onPress)
+        : m_onPress(std::move(onPress)) {}
+
+    bool nativeEventFilter(const QByteArray &eventType, void *message, qintptr *) override
+    {
+        if (eventType != "NSEvent" && eventType != "mac_generic_NSEvent")
+            return false;
+        const auto type = reinterpret_cast<unsigned long (*)(id, SEL)>(objc_msgSend)(
+                static_cast<id>(message), sel_getUid("type"));
+        // NSEventTypeLeftMouseDown
+        if (type == 1)
+            m_onPress();
+        return false;
+    }
+
+private:
+    std::function<void()> m_onPress;
+};
+
+bool leftButtonHeld()
+{
+    const auto buttons = reinterpret_cast<unsigned long (*)(id, SEL)>(objc_msgSend)(
+            reinterpret_cast<id>(objc_getClass("NSEvent")), sel_getUid("pressedMouseButtons"));
+    return buttons & 1;
+}
+#endif
+
 } // namespace
 
 TabManager::TabManager(QObject *parent)
@@ -71,6 +111,27 @@ TabManager::TabManager(QObject *parent)
         qWarning("Cannot open the renderer channel: %s", qPrintable(m_server->errorString()));
 
     connect(m_server, &QLocalServer::newConnection, this, &TabManager::onNewConnection);
+
+#ifdef Q_OS_MACOS
+    m_dragFollow = new QTimer(this);
+    m_dragFollow->setTimerType(Qt::PreciseTimer);
+    m_dragFollow->setInterval(8);
+    connect(m_dragFollow, &QTimer::timeout, this, &TabManager::followTitleBarDrag);
+
+    // After the button is released AppKit still owes the browser the final
+    // position. Until it arrives the predicted one is kept, so the page does
+    // not jump back to where the window started. This only bounds that wait.
+    m_dropPrediction = new QTimer(this);
+    m_dropPrediction->setSingleShot(true);
+    m_dropPrediction->setInterval(1000);
+    connect(m_dropPrediction, &QTimer::timeout, this, [this] {
+        m_predictedFrame.reset();
+        updatePlacement();
+    });
+
+    m_mouseDownFilter = new MouseDownFilter([this] { beginTitleBarDrag(); });
+    QCoreApplication::instance()->installNativeEventFilter(m_mouseDownFilter);
+#endif
 }
 
 TabManager::~TabManager()
@@ -81,6 +142,11 @@ TabManager::~TabManager()
     RendererShutdown::shutdown();
     qDeleteAll(m_tabs);
     m_tabs.clear();
+
+#ifdef Q_OS_MACOS
+    QCoreApplication::instance()->removeNativeEventFilter(m_mouseDownFilter);
+    delete m_mouseDownFilter;
+#endif
 }
 
 BrowserTab *TabManager::currentTab() const
@@ -196,6 +262,9 @@ void TabManager::addTab(const QString &url)
     connect(tab, &BrowserTab::attached, this, [this] { updatePlacement(); });
     connect(tab, &BrowserTab::shortcutRequested, this, &TabManager::handleShortcut);
     connect(tab, &BrowserTab::fullScreenRequested, this, &TabManager::setFullScreen);
+#ifdef Q_OS_MACOS
+    connect(tab, &BrowserTab::pagePressed, this, &TabManager::followPageForward);
+#endif
     tab->setChromeFullScreen(m_fullScreen);
     tab->setChromeHidden(!m_chromeVisible);
 
@@ -342,40 +411,54 @@ void TabManager::updatePlacement(bool force)
 #else
     // A window id from the renderer is a pointer in that process. Move the
     // page by telling the renderer its screen rectangle instead.
-    QWindow *host = nullptr;
-    const QList<QWindow *> windows = QGuiApplication::allWindows();
-    for (QWindow *window : windows) {
-        if (window->winId() == m_hostWindow) {
-            host = window;
-            break;
-        }
-    }
+    QWindow *host = hostWindow();
 
     const qreal ratio = host ? host->devicePixelRatio() : 1.0;
-    const QPoint origin = host ? host->mapToGlobal(QPoint(0, 0)) : QPoint();
+    QPoint origin = host ? host->mapToGlobal(QPoint(0, 0)) : QPoint();
+#ifdef Q_OS_MACOS
+    if (host && m_predictedFrame) {
+        // Once AppKit reports the same position the prediction has done its job.
+        if (!m_dragFollow->isActive() && host->framePosition() == *m_predictedFrame) {
+            m_predictedFrame.reset();
+            m_dropPrediction->stop();
+        } else {
+            const QMargins margins = host->frameMargins();
+            origin = *m_predictedFrame + QPoint(margins.left(), margins.top());
+        }
+    }
+#endif
     const bool showCurrent = host && m_viewportRect.isValid();
     const QRect screen(origin.x() + qRound(m_viewportRect.x() / ratio),
                        origin.y() + qRound(m_viewportRect.y() / ratio),
                        qRound(m_viewportRect.width() / ratio),
                        qRound(m_viewportRect.height() / ratio));
     qint64 above = hostWindowNumber(host);
+
+    if (host && host != m_trackedHost) {
+        if (m_trackedHost)
+            m_trackedHost->disconnect(this);
+        m_trackedHost = host;
+        // Moving the window renders no frame, so the per-frame sync in
+        // TabViewport never sees it. Follow the window's own position instead.
+        const auto follow = [this] { updatePlacement(); };
+        connect(host, &QWindow::xChanged, this, follow);
+        connect(host, &QWindow::yChanged, this, follow);
+        connect(host, &QWindow::screenChanged, this, follow);
+        // Restack the page when the browser is activated. On macOS the page
+        // also has to stop floating above other apps once it is not.
+        connect(host, &QWindow::activeChanged, this,
+                [this, host] { updatePlacement(host->isActive()); });
+    }
+
 #if defined(Q_OS_LINUX)
     // X11 window ids are not macOS window numbers. The renderer uses this id
     // as the transient owner so a window manager keeps the page with the browser.
     if (host && QGuiApplication::platformName() == QLatin1String("xcb"))
         above = static_cast<qint64>(static_cast<qulonglong>(host->winId()));
-
-    if (host && host != m_activationHost) {
-        m_activationHost = host;
-        connect(host, &QWindow::activeChanged, this, [this, host] {
-            if (host->isActive())
-                updatePlacement(true);
-        });
-    }
-    const bool raisePage = host && host->isActive();
-#else
-    const bool raisePage = false;
 #endif
+    // Whether the page may sit above everything else: only while the browser
+    // is the active window. Otherwise other apps must be able to cover it.
+    const bool raisePage = host && host->isActive();
 
     for (int i = 0; i < m_tabs.size(); ++i) {
         auto *tab = qobject_cast<BrowserTab *>(m_tabs.at(i));
@@ -386,6 +469,82 @@ void TabManager::updatePlacement(bool force)
     }
 #endif
 }
+
+QWindow *TabManager::hostWindow() const
+{
+    const QList<QWindow *> windows = QGuiApplication::allWindows();
+    for (QWindow *window : windows) {
+        if (window->winId() == m_hostWindow)
+            return window;
+    }
+    return nullptr;
+}
+
+#ifdef Q_OS_MACOS
+void TabManager::beginTitleBarDrag()
+{
+    QWindow *host = hostWindow();
+    if (!host || host->visibility() == QWindow::FullScreen)
+        return;
+
+    // A drag that starts right after the last one ends begins from where that
+    // one left the window, which AppKit may not have reported yet.
+    const QPoint frame = m_predictedFrame.value_or(host->framePosition());
+    const QPoint cursor = QCursor::pos();
+    const int titleBar = host->frameMargins().top();
+    // Only the title bar moves the window. The first 80 points hold the close,
+    // minimise and zoom buttons, which do not.
+    if (titleBar <= 0 || cursor.y() < frame.y() || cursor.y() >= frame.y() + titleBar
+            || cursor.x() < frame.x() + 80 || cursor.x() >= frame.x() + host->width())
+        return;
+
+    m_dragStartCursor = cursor;
+    m_dragStartFrame = frame;
+    m_predictedFrame = frame;
+    m_dropPrediction->stop();
+    m_dragFollow->start();
+}
+
+void TabManager::followPageForward(qint64 pageWindow)
+{
+    // Ordering its own window just below the page brings the browser forward
+    // with it, without activating the browser and taking the click's keyboard
+    // focus away from the page.
+    QWindow *host = hostWindow();
+    id nsView = host ? reinterpret_cast<id>(host->winId()) : nil;
+    id nsWindow = nsView ? reinterpret_cast<id (*)(id, SEL)>(objc_msgSend)(
+            nsView, sel_getUid("window")) : nil;
+    if (!nsWindow || pageWindow <= 0)
+        return;
+    // NSWindowBelow == -1.
+    reinterpret_cast<void (*)(id, SEL, long, long)>(objc_msgSend)(
+            nsWindow, sel_getUid("orderWindow:relativeTo:"), -1L, long(pageWindow));
+}
+
+void TabManager::followTitleBarDrag()
+{
+    // The window server moves a title bar drag by exactly the distance the
+    // pointer travels, keeping the title bar below the menu bar. Reading the
+    // cursor costs nothing, where asking the window server for the window's
+    // position blocks for as long as it is busy compositing.
+    const QPoint cursor = QCursor::pos();
+    QPoint frame = m_dragStartFrame + (cursor - m_dragStartCursor);
+    if (QScreen *screen = QGuiApplication::screenAt(cursor))
+        frame.setY(qMax(frame.y(), screen->availableGeometry().top()));
+    m_predictedFrame = frame;
+
+    if (!leftButtonHeld()) {
+        m_dragFollow->stop();
+        // A click or double click that never moved the pointer has nothing to
+        // predict, and a zoom on double click must not be held back by it.
+        if (frame == m_dragStartFrame)
+            m_predictedFrame.reset();
+        else
+            m_dropPrediction->start();
+    }
+    updatePlacement();
+}
+#endif
 
 void TabManager::onNewConnection()
 {

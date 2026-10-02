@@ -240,6 +240,8 @@ void BrowserTab::onMessage(const QJsonObject &message)
         emit shortcutRequested(message.value(QStringLiteral("key")).toString());
     } else if (type == QLatin1String("fullscreen")) {
         emit fullScreenRequested(message.value(QStringLiteral("on")).toBool());
+    } else if (type == QLatin1String("pagePressed")) {
+        emit pagePressed(qint64(message.value(QStringLiteral("window")).toDouble()));
     }
 }
 

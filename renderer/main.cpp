@@ -22,6 +22,9 @@
 #include <QTimer>
 #include <QWindow>
 
+#include <memory>
+#include <utility>
+
 #if defined(QMLBROWSER_HAS_X11)
 #include <qnativeinterface.h>
 // Xlib's None collides with Qt. Pull the declarations we need without that macro.
@@ -154,6 +157,10 @@ void showWithoutTakingKey(QWindow *window)
     window->installEventFilter(new TakeKeyOnPress(window));
 }
 
+// Whether the browser window is active. Only then may the page float above
+// every normal window; otherwise it would cover other apps as well.
+bool browserInFront = true;
+
 // Qt's raise() calls orderFront, which a background process cannot use to
 // cover the active browser. The page then sits behind the window that asked
 // for it, and the tab looks empty until a later hide/show.
@@ -167,8 +174,12 @@ void stackPage(QWindow *window, int aboveWindowNumber, bool forceFront)
         return;
 
     using SendVoidLong = void (*)(id, SEL, long);
-    // NSFloatingWindowLevel. At normal level the page is covered by the browser.
-    reinterpret_cast<SendVoidLong>(objc_msgSend)(nsWindow, sel_getUid("setLevel:"), 3L);
+    // NSFloatingWindowLevel while the browser is in front: at normal level the
+    // browser covers the page as soon as it is activated. Once another app is
+    // in front, NSNormalWindowLevel just above the browser, so that app's
+    // windows cover the page together with the browser.
+    reinterpret_cast<SendVoidLong>(objc_msgSend)(nsWindow, sel_getUid("setLevel:"),
+                                                 browserInFront ? 3L : 0L);
     // The renderer process is not the active app. A tool window that hides on
     // deactivate never appears over the browser that opened the tab.
     reinterpret_cast<void (*)(id, SEL, BOOL)>(objc_msgSend)(
@@ -178,7 +189,9 @@ void stackPage(QWindow *window, int aboveWindowNumber, bool forceFront)
         reinterpret_cast<void (*)(id, SEL, long, long)>(objc_msgSend)(
                 nsWindow, sel_getUid("orderWindow:relativeTo:"), 1L, long(aboveWindowNumber));
     }
-    if (forceFront) {
+    // Bringing the page to the very front is only right while the browser is
+    // there too.
+    if (forceFront && browserInFront) {
         reinterpret_cast<void (*)(id, SEL, id)>(objc_msgSend)(
                 nsWindow, sel_getUid("orderFrontRegardless"), nil);
     }
@@ -240,14 +253,43 @@ public:
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override
     {
-        if (event->type() != QEvent::KeyPress)
+        if (event->type() != QEvent::ShortcutOverride && event->type() != QEvent::KeyPress)
             return QObject::eventFilter(watched, event);
 
-        auto *key = static_cast<QKeyEvent *>(event);
-        const Qt::KeyboardModifiers mods =
-                key->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::ShiftModifier);
+        const QString name = shortcutName(static_cast<QKeyEvent *>(event));
+        if (name.isEmpty())
+            return QObject::eventFilter(watched, event);
+
+        // Forward on the override, which every key press gets first. On macOS
+        // the window consumes Control+Tab for its focus loop, so no KeyPress
+        // ever follows. Where one does, it is swallowed rather than sent twice.
+        if (event->type() == QEvent::ShortcutOverride) {
+            QJsonObject message;
+            message.insert(QStringLiteral("type"), QStringLiteral("shortcut"));
+            message.insert(QStringLiteral("key"), name);
+            m_channel->send(message);
+            event->accept();
+        }
+        return true;
+    }
+
+private:
+    QString shortcutName(const QKeyEvent *key) const
+    {
+        const Qt::KeyboardModifiers mods = key->modifiers()
+                & (Qt::ControlModifier | Qt::AltModifier | Qt::ShiftModifier | Qt::MetaModifier);
+        const bool tabKey = key->key() == Qt::Key_Tab || key->key() == Qt::Key_Backtab;
 
         QString name;
+#ifdef Q_OS_MACOS
+        // Qt reports Command as Ctrl and the Control key as Meta. Command+Tab is
+        // the app switcher, so tabs cycle on Control+Tab, as in Chrome.
+        if (tabKey && mods == Qt::MetaModifier)
+            name = QStringLiteral("Ctrl+Tab");
+        else if (tabKey && mods == (Qt::MetaModifier | Qt::ShiftModifier))
+            name = QStringLiteral("Ctrl+Shift+Tab");
+        else
+#endif
         if (mods == Qt::ControlModifier) {
             switch (key->key()) {
             case Qt::Key_T: name = QStringLiteral("Ctrl+T"); break;
@@ -259,7 +301,7 @@ protected:
             default: break;
             }
         } else if (mods == (Qt::ControlModifier | Qt::ShiftModifier)) {
-            if (key->key() == Qt::Key_Tab || key->key() == Qt::Key_Backtab)
+            if (tabKey)
                 name = QStringLiteral("Ctrl+Shift+Tab");
             else if (key->key() == Qt::Key_F)
                 name = QStringLiteral("Ctrl+Shift+F");
@@ -277,21 +319,46 @@ protected:
                 name = QStringLiteral("Escape");
         }
 
-        if (name.isEmpty())
-            return QObject::eventFilter(watched, event);
-
-        QJsonObject message;
-        message.insert(QStringLiteral("type"), QStringLiteral("shortcut"));
-        message.insert(QStringLiteral("key"), name);
-        m_channel->send(message);
-        return true;
+        return name;
     }
 
-private:
     IpcChannel *m_channel = nullptr;
     bool m_fullScreen = false;
     bool m_chromeHidden = false;
 };
+
+#ifdef Q_OS_MACOS
+// A click on the page while another app is in front brings the page forward on
+// its own, and the browser window stays behind that app. Ask the browser to
+// follow, so the page is never left floating over another app's window.
+class BrowserFollowsPress : public QObject
+{
+public:
+    BrowserFollowsPress(QWindow *window, IpcChannel *channel)
+        : QObject(window), m_window(window), m_channel(channel) {}
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        if (event->type() == QEvent::MouseButtonPress && !browserInFront) {
+            id nsWindow = pageNsWindow(m_window);
+            const long number = nsWindow ? reinterpret_cast<long (*)(id, SEL)>(objc_msgSend)(
+                    nsWindow, sel_getUid("windowNumber")) : 0;
+            if (number > 0) {
+                QJsonObject message;
+                message.insert(QStringLiteral("type"), QStringLiteral("pagePressed"));
+                message.insert(QStringLiteral("window"), static_cast<double>(number));
+                m_channel->send(message);
+            }
+        }
+        return QObject::eventFilter(watched, event);
+    }
+
+private:
+    QWindow *m_window = nullptr;
+    IpcChannel *m_channel = nullptr;
+};
+#endif
 
 // The page is a child of the browser window. Over that child Windows forwards
 // WM_SETCURSOR to the browser, and the browser's null class cursor leaves
@@ -406,6 +473,40 @@ void keepPageAboveBrowser(QWindow *page, qulonglong browserId)
 }
 #endif
 
+// Holds the page's frames back while its window is being moved.
+//
+// An animated page keeps this thread drawing, and where the system has no GPU
+// each frame can block it for a tenth of a second. A placement then waits
+// behind the frame, and the page trails the browser it is meant to cover. The
+// window keeps showing its last frame meanwhile; drawing resumes shortly after
+// the last move.
+class MoveFrameGate : public QObject
+{
+public:
+    explicit MoveFrameGate(QWindow *window)
+        : QObject(window), m_window(window)
+    {
+        m_settle.setSingleShot(true);
+        m_settle.setInterval(150);
+        connect(&m_settle, &QTimer::timeout, this, [this] { m_window->requestUpdate(); });
+        window->installEventFilter(this);
+    }
+
+    void moved() { m_settle.start(); }
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        if (event->type() == QEvent::UpdateRequest && m_settle.isActive())
+            return true;
+        return QObject::eventFilter(watched, event);
+    }
+
+private:
+    QWindow *m_window = nullptr;
+    QTimer m_settle;
+};
+
 // Collapses the page state into the single message the browser process needs
 // in order to paint the tab strip, address bar and status line.
 QJsonObject stateMessage(PageView *page)
@@ -504,6 +605,9 @@ int main(int argc, char *argv[])
 
     auto *shortcuts = new ShortcutForwarder(channel, &app);
     view.installEventFilter(shortcuts);
+#ifdef Q_OS_MACOS
+    view.installEventFilter(new BrowserFollowsPress(&view, channel));
+#endif
     app.installNativeEventFilter(new ClientCursorReset(&view));
 
     QObject::connect(channel, &IpcChannel::disconnected, &app, [] {
@@ -552,50 +656,82 @@ int main(int argc, char *argv[])
     // the window handle sent in `hello`, so resizing the browser window does not
     // wait on a round trip through this socket.
     QQuickItem *root = view.rootObject();
+
+    // Only the newest placement matters. While a window drag streams them in,
+    // moving through every queued one would leave the page further behind.
+    auto pendingPlace = std::make_shared<QJsonObject>();
+    auto *frameGate = new MoveFrameGate(&view);
+    auto placeTimer = new QTimer(&app);
+    placeTimer->setSingleShot(true);
+    placeTimer->setInterval(0);
+    QObject::connect(placeTimer, &QTimer::timeout, &app,
+                     [pendingPlace, root, frameGate, &view] {
+        const QJsonObject message = std::exchange(*pendingPlace, {});
+        if (!message.value(QStringLiteral("visible")).toBool()) {
+            view.hide();
+            return;
+        }
+        const QRect rect(message.value(QStringLiteral("x")).toInt(),
+                         message.value(QStringLiteral("y")).toInt(),
+                         message.value(QStringLiteral("width")).toInt(),
+                         message.value(QStringLiteral("height")).toInt());
+        const bool wasHidden = !view.isVisible();
+        if (wasHidden) {
+            view.setGeometry(rect);
+#ifdef Q_OS_MACOS
+            showWithoutTakingKey(&view);
+#else
+            view.show();
+#endif
+        }
+        if (wasHidden || rect.size() != view.size()) {
+            view.setGeometry(rect);
+            if (root)
+                root->setSize(rect.size());
+            view.requestUpdate();
+        } else {
+            // The browser window is being dragged. Moving the window is all it
+            // takes; the page itself has not changed and need not be redrawn.
+            frameGate->moved();
+            view.setPosition(rect.topLeft());
+        }
+#ifdef Q_OS_MACOS
+        const int above = message.value(QStringLiteral("above")).toInt();
+        const bool inFront = message.value(QStringLiteral("raise")).toBool();
+        if (!wasHidden && inFront != browserInFront) {
+            // The browser was activated, or another app came in front of it.
+            browserInFront = inFront;
+            stackPage(&view, above, false);
+        }
+        // Otherwise a move or resize leaves the stacking alone, since
+        // orderFrontRegardless on every step of a drag would activate this
+        // process and stall it.
+        if (wasHidden) {
+            browserInFront = inFront;
+            orderPageAbove(&view, above);
+            keepBrowserInFront(&view, above);
+            QTimer::singleShot(0, &view, [&view, above] {
+                orderPageAbove(&view, above);
+                activateBrowser();
+                view.requestUpdate();
+            });
+        }
+#else
+        const bool raise = wasHidden || message.value(QStringLiteral("raise")).toBool();
+        if (raise) {
+            const qulonglong above = static_cast<qulonglong>(
+                    message.value(QStringLiteral("above")).toDouble());
+            keepPageAboveBrowser(&view, above);
+        }
+#endif
+    });
+
     QObject::connect(channel, &IpcChannel::received, &app,
-                     [page, root, shortcuts, &view](const QJsonObject &message) {
+                     [page, root, shortcuts, pendingPlace, placeTimer](const QJsonObject &message) {
                          const QString type = message.value(QStringLiteral("type")).toString();
                          if (type == QLatin1String("place")) {
-                             if (!message.value(QStringLiteral("visible")).toBool()) {
-                                 view.hide();
-                                 return;
-                             }
-                             const QRect rect(message.value(QStringLiteral("x")).toInt(),
-                                              message.value(QStringLiteral("y")).toInt(),
-                                              message.value(QStringLiteral("width")).toInt(),
-                                              message.value(QStringLiteral("height")).toInt());
-                             const bool wasHidden = !view.isVisible();
-                             if (wasHidden) {
-                                 view.setGeometry(rect);
-#ifdef Q_OS_MACOS
-                                 showWithoutTakingKey(&view);
-#else
-                                 view.show();
-#endif
-                             }
-                             view.setGeometry(rect);
-                             if (root)
-                                 root->setSize(rect.size());
-                             view.requestUpdate();
-#ifdef Q_OS_MACOS
-                             const int above = message.value(QStringLiteral("above")).toInt();
-                             orderPageAbove(&view, above);
-                             if (wasHidden) {
-                                 keepBrowserInFront(&view, above);
-                                 QTimer::singleShot(0, &view, [&view, above] {
-                                     orderPageAbove(&view, above);
-                                     activateBrowser();
-                                     view.requestUpdate();
-                                 });
-                             }
-#else
-                             const bool raise = wasHidden || message.value(QStringLiteral("raise")).toBool();
-                             if (raise) {
-                                 const qulonglong above = static_cast<qulonglong>(
-                                         message.value(QStringLiteral("above")).toDouble());
-                                 keepPageAboveBrowser(&view, above);
-                             }
-#endif
+                             *pendingPlace = message;
+                             placeTimer->start();
                          } else if (type == QLatin1String("navigate")) {
                              page->setUrl(QUrl(message.value(QStringLiteral("url")).toString()));
                          } else if (type == QLatin1String("reload")) {

@@ -652,6 +652,18 @@ Window {
     Shortcut { sequence: "Ctrl+W";        onActivated: tabs.handleShortcut("Ctrl+W") }
     Shortcut { sequence: "Ctrl+Tab";      onActivated: tabs.handleShortcut("Ctrl+Tab") }
     Shortcut { sequence: "Ctrl+Shift+Tab";onActivated: tabs.handleShortcut("Ctrl+Shift+Tab") }
+    // Qt reads Ctrl as Command on macOS, and Command+Tab is the app switcher.
+    // Chrome uses the Control key there, which Qt calls Meta.
+    Shortcut {
+        sequence: "Meta+Tab"
+        enabled: Qt.platform.os === "osx" || Qt.platform.os === "macos"
+        onActivated: tabs.handleShortcut("Ctrl+Tab")
+    }
+    Shortcut {
+        sequence: "Meta+Shift+Tab"
+        enabled: Qt.platform.os === "osx" || Qt.platform.os === "macos"
+        onActivated: tabs.handleShortcut("Ctrl+Shift+Tab")
+    }
     Shortcut { sequence: "F5";            onActivated: tabs.handleShortcut("F5") }
     Shortcut { sequence: "Ctrl+R";        onActivated: tabs.handleShortcut("Ctrl+R") }
     Shortcut { sequence: "Alt+Left";      onActivated: tabs.handleShortcut("Alt+Left") }
