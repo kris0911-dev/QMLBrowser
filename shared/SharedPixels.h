@@ -27,5 +27,10 @@ public:
     QString errorString() const;
 
 private:
+    void assignKey(const QString &key);
+
+    // The name both processes agree on. QSharedMemory::key() is empty when the
+    // segment is opened with a native POSIX key, so this is stored separately.
+    QString m_key;
     QSharedMemory m_memory;
 };

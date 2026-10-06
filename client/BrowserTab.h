@@ -8,13 +8,12 @@
 #include <QUrl>
 
 #include "BrowserHistory.h"
+#include "IpcChannel.h"
 #include "SharedPixels.h"
 
 QT_BEGIN_NAMESPACE
 class QProcess;
 QT_END_NAMESPACE
-
-class IpcChannel;
 
 // One tab, backed by its own QmlRenderer.exe.
 //

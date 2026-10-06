@@ -53,6 +53,12 @@ QJsonObject stateMessage(PageView *page)
 
 int main(int argc, char *argv[])
 {
+#ifdef Q_OS_MACOS
+    // Qt activates a Gui application from applicationDidFinishLaunching unless
+    // this is set. A tab's renderer would then become the front process, and
+    // the browser window stays inactive until its title bar is clicked.
+    qputenv("QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM", "1");
+#endif
     QGuiApplication app(argc, argv);
     QGuiApplication::setApplicationName(QStringLiteral("QmlRenderer"));
 #ifdef Q_OS_MACOS
