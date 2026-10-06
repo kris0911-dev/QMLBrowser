@@ -12,8 +12,8 @@
 // occupies the reclaimed caption area and hosts the window buttons itself.
 //
 // Qt.FramelessWindowHint is deliberately not used: it also throws away the
-// resize borders, and those have to live outside the client area because the
-// renderer's child window covers everything QML draws in the page.
+// resize borders, and those have to live outside the client area so the tab
+// strip can occupy the caption without giving up snapping and the shadow.
 class WindowFrame : public QAbstractNativeEventFilter
 {
 public:

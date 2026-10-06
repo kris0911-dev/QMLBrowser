@@ -1,13 +1,14 @@
 #pragma once
 
+#include <QImage>
 #include <QJsonObject>
 #include <QObject>
 #include <QPointer>
-#include <QRect>
+#include <QSize>
 #include <QUrl>
-#include <QWindow>
 
 #include "BrowserHistory.h"
+#include "SharedPixels.h"
 
 QT_BEGIN_NAMESPACE
 class QProcess;
@@ -17,9 +18,9 @@ class IpcChannel;
 
 // One tab, backed by its own QmlRenderer.exe.
 //
-// This object never renders anything. It owns the renderer process, the history
-// stack for that tab, and a mirror of the page state the renderer reports, which
-// is what the tab strip and address bar bind to.
+// The renderer has no window. It submits compositor frames through shared
+// memory; this object keeps the latest one so the browser window can draw it,
+// and forwards input because the page itself cannot be clicked.
 class BrowserTab : public QObject
 {
     Q_OBJECT
@@ -43,7 +44,7 @@ public:
     enum Status { Null, Loading, Ready, Error };
     Q_ENUM(Status)
 
-    BrowserTab(int id, const QString &channelName, WId hostWindow, QObject *parent = nullptr);
+    BrowserTab(int id, const QString &channelName, QObject *parent = nullptr);
     ~BrowserTab() override;
 
     int id() const { return m_id; }
@@ -61,24 +62,21 @@ public:
     bool canGoForward() const { return m_history->canGoForward(); }
 
     BrowserHistory *history() const { return m_history; }
-    WId childWindow() const { return m_childWindow; }
-    bool isAttached() const;
+    bool isAttached() const { return m_channel != nullptr; }
+    QImage frame() const { return m_frame; }
+    int cursorShape() const { return m_cursorShape; }
 
     // Called by TabManager once the renderer has connected back.
-    void attach(IpcChannel *channel, WId childWindow, qint64 pid);
+    void attach(IpcChannel *channel, qint64 pid);
 
     // Tells the renderer whether the browser chrome is currently hidden.
     void setChromeFullScreen(bool on);
     void setChromeHidden(bool hidden);
 
-    // macOS cannot SetWindowPos a window that belongs to another process, so the
-    // renderer moves its own window. screenRect is in global logical pixels.
-    // aboveWindow is the browser's macOS window number, or on X11 its native
-    // window id. Zero when the platform does not stack the page that way.
-    // raisePage asks the renderer to restack above the browser. Geometry-only
-    // updates leave the stacking order alone.
-    void place(bool visible, const QRect &screenRect, qint64 aboveWindow = 0, bool force = false,
-               bool raisePage = false);
+    // Logical pixels of the page area. Only the active tab is visible; the
+    // others keep the size so a snapshot can be taken, then stop drawing.
+    void setViewport(bool visible, const QSize &logicalSize, qreal dpr);
+    void postInput(const QJsonObject &event);
 
     void navigateTo(const QUrl &url);
     Q_INVOKABLE void navigateToText(const QString &text);
@@ -92,15 +90,14 @@ public:
 signals:
     void stateChanged();
     void sourceTextChanged();
-    // Emitted once the renderer's window exists and can be placed.
+    // Emitted once the renderer is connected and can take a viewport.
     void attached();
+    void frameChanged();
+    void cursorChanged(int shape);
     // A browser-level key combination pressed while the page had focus.
     void shortcutRequested(const QString &key);
     // The page called browser.setFullScreen().
     void fullScreenRequested(bool on);
-    // macOS: the page was clicked while another app was in front, which
-    // brought only the page's own window forward. pageWindow is its number.
-    void pagePressed(qint64 pageWindow);
 
 private:
     void startProcess();
@@ -108,16 +105,16 @@ private:
     void releaseRenderer();
     void onProcessFinished(int exitCode, int status);
     void onMessage(const QJsonObject &message);
+    void onFrame(const QJsonObject &message);
     void sendCurrentUrl();
     void sendChromeState();
+    void sendViewport();
 
     int m_id = 0;
     QString m_channelName;
-    WId m_hostWindow = 0;
 
     QProcess *m_process = nullptr;
     QPointer<IpcChannel> m_channel;
-    WId m_childWindow = 0;
     qint64 m_rendererPid = 0;
 
     BrowserHistory *m_history = nullptr;
@@ -133,8 +130,13 @@ private:
     bool m_closing = false;
     bool m_chromeFullScreen = false;
     bool m_chromeHidden = false;
-    bool m_placedVisible = false;
-    QRect m_placedRect;
-    qint64 m_aboveWindow = 0;
-    bool m_raisePage = false;
+
+    bool m_viewportValid = false;
+    bool m_viewportVisible = false;
+    QSize m_viewportSize;
+    qreal m_viewportDpr = 1;
+
+    SharedPixels m_pixels;
+    QImage m_frame;
+    int m_cursorShape = 0;
 };

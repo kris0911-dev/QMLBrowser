@@ -4,7 +4,7 @@ A browser whose documents are QML, not HTML. The window, the tabs, and the pages
 
 This file describes how the project is built, how a page is loaded, and what a document is allowed to do. `README.md` is the short version, including the Windows and macOS prerequisites.
 
-The shipped build is Windows, Visual Studio, Qt 6.10.3. The HTTP servers and the QML documents are portable. The window frame, the child-window embedding, and the erase-background handling are Windows-only.
+The shipped build is Windows, Visual Studio, Qt 6.10.3. The HTTP servers and the QML documents are portable. The window frame is Windows-only. Page drawing is the same on every platform: the renderer has no window, and the browser composites its frames.
 
 ## The three programs
 
@@ -21,17 +21,17 @@ A Node.js server in `nodejs\` speaks the same HTTP as `QmlServer.exe` and serves
 ```
 QmlBrowser.exe                         QmlServer.exe  or  node server.js
   tab strip, address bar, history          HTTP GET/HEAD of *.qml
+  composites each tab's frame
         |                                        ^
         |  QLocalSocket, one JSON object         |  QNetworkAccessManager
         |  per line                              |
         v                                        |
   QmlRenderer.exe  ---- HTTP GET --------------+
-    one process per tab
-    Windows: QQuickView reparented into the browser
-    macOS: frameless tool window, moved by place
+    one process per tab, no window
+    rasterizes into shared memory
 ```
 
-State (URL, title, HTTP status, shortcuts) travels on the local socket. On Windows the size and position of the page do not: the browser moves the renderer's native window with `SetWindowPos` and `ShowWindow`. On macOS that window id is not usable across processes, so the browser sends the rectangle in a `place` message.
+State (URL, title, HTTP status, shortcuts) travels on the local socket. Frames travel in shared memory: the renderer writes a bitmap and sends `frame`, and the browser draws it inside its own window. `viewport` carries the page size. There is no second native window to move.
 
 ## Requirements
 
@@ -59,7 +59,7 @@ There is no CMake and no qmake step. `moc` and `rcc` are MSBuild custom build st
 
 Open `build/macos-xcode/QmlBrowser.xcodeproj`. Run the QmlServer scheme, then debug the QmlBrowser scheme. Qt Creator uses the `macos-debug` preset the same way: Debug, `CMAKE_PREFIX_PATH` from `QTDIR`.
 
-On macOS the page is not a child window. The browser sends `{ "type": "place", "visible", "x", "y", "width", "height", "above" }` in global logical pixels. `above` is the browser `NSWindow`'s `windowNumber`. The renderer is a frameless `Qt::Tool` window at floating level, ordered above that window. `QmlRenderer.app` is an agent (`LSUIElement` in `renderer/Info.plist.in`), and the process sets the accessory activation policy, so a tab does not get a Dock icon. A show does not take key from the browser; the first click on the page does. The custom caption, `WM_ERASEBKGND`, and `WM_SETCURSOR` are still Windows-only.
+On macOS the page is not a window. The renderer is an agent (`LSUIElement` in `renderer/Info.plist.in`) and sets the accessory activation policy, so a tab does not get a Dock icon. The custom caption stays Windows-only.
 
 The Node server runs there with Node.js 18 or newer and no packages:
 
@@ -69,14 +69,7 @@ node nodejs/server.js -help
 node nodejs/server.js -public
 ```
 
-Shared Qt behavior already applies on macOS: the address bar, a blank new tab, the server command line, HTTP, the page API, and the dark rectangle behind the page. The page window follows the viewport through `place`. These stay Windows-only:
-
-- the custom caption (`WindowFrame`)
-- embedding the renderer as a child window (`SetWindowPos` / `ShowWindow`)
-- the `WM_ERASEBKGND` fill that hides the new-tab flash
-- the `WM_SETCURSOR` handler that stops the resize pointer from sticking
-
-On macOS the browser starts `QmlRenderer.app`. On Windows it starts `QmlRenderer.exe`.
+Shared Qt behavior already applies on macOS: the address bar, a blank new tab, the server command line, HTTP, the page API, and offscreen frame compositing. The custom caption (`WindowFrame`) stays Windows-only.
 
 ### Either platform
 
@@ -132,9 +125,9 @@ Each tab has its own back/forward stack. The status line shows the HTTP status, 
 | Enter in the address bar | Go to the typed address |
 | Esc in the address bar | Restore the field to the current URL |
 
-Shortcuts work while the page has keyboard focus. The renderer recognizes them and sends them to the browser instead of letting the page consume them. Esc is only taken while the chrome is actually hidden, so a page can use Esc the rest of the time.
+Shortcuts work while the page has keyboard focus. They are Qt Quick shortcuts on the browser window, so they run there instead of being delivered to the page. Esc is only taken while the chrome is actually hidden, so a page can use Esc the rest of the time.
 
-Full screen and chrome-hide are independent. Hiding the bars, then going full screen, then pressing Esc leaves full screen and leaves the bars hidden. A second Esc shows the bars. While the chrome is off the screen, the page covers the browser window, so the "press Esc" reminder is drawn by the renderer.
+Full screen and chrome-hide are independent. Hiding the bars, then going full screen, then pressing Esc leaves full screen and leaves the bars hidden. A second Esc shows the bars. While the chrome is off the screen, the "press Esc" reminder is drawn into the page frame.
 
 A page can call `browser.crash()` to abort its own renderer. That tab shows a recovery page. Reload starts a new `QmlRenderer.exe` on the same history. Other tabs are unaffected.
 
@@ -362,16 +355,16 @@ Percent-decoding uses `decodeURIComponent`. A broken `%` sequence is `400`. The 
 `QmlBrowser` listens on a `QLocalServer` named `qmlbrowser-<pid>-<uuid>`. That name is a pipe on Windows and a socket file elsewhere. Creating a tab starts:
 
 ```
-QmlRenderer.exe --channel <name> --tab <id> --parent <browser window id>
+QmlRenderer.exe --channel <name> --tab <id>
 ```
 
-The renderer connects, then sends `hello` on the next event-loop turn, with its own window handle and process id. Sending it from inside `waitForConnected` would show the window from a nested loop, and AppKit would leave the tab blank. The view is frameless and its clear color is `#0e1017`. On Windows it reparents into the browser with `QWindow::fromWinId` and `QWindow::setParent`, and the browser shows and moves that child with `SetWindowPos` and `ShowWindow` after `hello`. On macOS that handle is not a cross-process window id, so the renderer stays its own window and applies `place` messages instead.
+On macOS the browser starts `QmlRenderer.app`. On Windows it starts `QmlRenderer.exe`. The renderer connects, then sends `hello` on the next event-loop turn, with its process id. It does not create a window. `QQuickRenderControl` rasterizes the Qt Quick scene into an offscreen texture. The pixels are copied into a shared-memory bitmap and announced with `frame`. `TabViewport` uploads that bitmap into the browser window's scene graph.
 
 `QmlRenderer.exe` refuses to start without `--channel` (exit 2). If it cannot connect within 5 seconds it exits 1. If the browser disconnects, the renderer quits.
 
-Closing a tab closes the socket. The renderer treats that as the request to exit. The browser does not post `WM_CLOSE`, because on Windows the renderer window is a child and would not receive it. If the process is still alive after 2 seconds, it is killed. The same grace period is used when the browser itself is shutting down.
+Closing a tab closes the socket. The renderer treats that as the request to exit. If the process is still alive after 2 seconds, it is killed. The same grace period is used when the browser itself is shutting down.
 
-If the renderer exits for any other reason, the tab is marked crashed. A crash exit says the process terminated unexpectedly. A normal exit reports the code. The child window is gone, so the recovery page drawn by the browser chrome is visible. Restart launches a new renderer into the same history.
+If the renderer exits for any other reason, the tab is marked crashed. A crash exit says the process terminated unexpectedly. A normal exit reports the code. The recovery page drawn by the browser chrome covers that tab. Restart launches a new renderer into the same history.
 
 ### Messages
 
@@ -384,23 +377,26 @@ Browser to renderer:
 | `navigate` | `url` string | Load that absolute URL. |
 | `reload` | | Fetch the current URL again. |
 | `stop` | | Abort the current download. |
-| `chrome` | `fullScreen` bool, `chromeHidden` bool | Remember whether the chrome is off screen, and set the on-page notice. |
-| `place` | `visible` bool, `x`, `y`, `width`, `height`, `above` number | macOS only. Move or hide the renderer's own window and stack it above `above` (the browser window number, or 0). Coordinates are global logical pixels. A repeated rectangle is not sent again unless placement is forced. Windows keeps using `SetWindowPos` and does not send this. |
+| `chrome` | `fullScreen` bool, `chromeHidden` bool | Set the on-page notice. |
+| `viewport` | `visible` bool, `width`, `height`, `dpr` | Logical page size and device pixel ratio. A hidden tab is snapshotted when the size changes and otherwise does not draw. A repeated value is not sent again. |
+| `input` | `kind` plus event fields | A pointer, wheel, key, or focus event in viewport coordinates. |
+| `frameAck` | `seq` number | The browser has copied that frame. The renderer may reuse the slot. |
 
 Renderer to browser:
 
 | type | Fields | Effect |
 |---|---|---|
-| `hello` | `tab` number, `winId` number, `pid` number | The renderer window exists and can be placed. On Windows that window is the child. On macOS it is the tool window. |
+| `hello` | `tab` number, `pid` number | The renderer is connected and can take a viewport. |
+| `frame` | `seq`, `width`, `height`, `stride`, `format`, `shm` | A new bitmap is in the shared-memory segment named `shm`. `width` and `height` are device pixels. `format` 1 is premultiplied RGBA, 2 is premultiplied BGRA. |
+| `cursor` | `shape` number | `Qt::CursorShape` for the page under the pointer. |
 | `state` | `status`, `title`, `url`, `httpStatus`, `progress`, `error`, `bytes` | Update the tab strip, address bar, and status line. Sent at most once per event-loop turn. |
 | `source` | `text` | The source panel. |
 | `navigate` | `url` | The page called `browser.navigate`. The browser owns history and sends a `navigate` back. |
 | `fullscreen` | `on` | The page called `browser.setFullScreen`. |
-| `shortcut` | `key` | A browser shortcut was pressed while the page had focus. `key` is `Ctrl+T`, `Ctrl+W`, `Ctrl+Tab`, `Ctrl+Shift+Tab`, `Ctrl+R`, `Ctrl+L`, `Ctrl+U`, `Ctrl+Shift+F`, `Alt+Left`, `Alt+Right`, `F5`, `F11`, or `Escape`. |
 
 `status` in `state` matches `PageView`: 0 null, 1 loading, 2 ready, 3 error. `bytes` is the character length of the source.
 
-`TabViewport` publishes the page rectangle in device pixels on `QQuickWindow::afterAnimating`. On Windows that moves the child window when the window is resized, when the bars show or hide, or when the DPI scale changes. On macOS `syncPlacement` also runs when the browser window moves, because the page is a separate window and an unchanged viewport rectangle still has a new screen position. Only the active tab's renderer is shown.
+`TabViewport` publishes the logical page size and the window's device pixel ratio on `QQuickWindow::afterAnimating`. That covers resizes, the bars showing or hiding, and DPI changes. Only the active tab's renderer is asked to keep drawing. Two shared-memory slots are in flight at once, so the renderer can prepare the next frame while the browser still holds the previous one.
 
 ## The window, on Windows
 
@@ -410,13 +406,11 @@ Renderer to browser:
 - empty space on the tab strip returns `HTCAPTION`
 - everything else in the client returns `HTCLIENT`
 
-`Qt.FramelessWindowHint` is not used on the browser. It would remove the resize borders, and those borders have to sit outside the client area because the renderer covers whatever the chrome paints in the page rectangle.
+`Qt.FramelessWindowHint` is not used on the browser. It would remove the resize borders, and those borders have to sit outside the client area so the tab strip can occupy the caption.
 
-The renderer is a child window. Windows forwards `WM_SETCURSOR` for that child to the parent, and the parent's class cursor is null, so a size cursor from the frame edge would stick after the bars hide and the page meets the border. The renderer handles `WM_SETCURSOR` on `HTCLIENT` and sets the arrow, unless the page has set its own cursor (a link, a splitter). It also paints `#0e1017` on `WM_ERASEBKGND`. The browser frame paints `#0b0d13` on erase, and the QML content area has a rectangle of `#0e1017` behind the viewport. Those three are what stop the white flash when a new tab hides the previous child before the new renderer has drawn.
+The page is part of this window's scene graph, so it moves with the frame. The content area paints `#0e1017` until the first frame arrives. The crash page is a rectangle drawn over the viewport. The full-screen reminder is drawn into the page frame via the `chrome` message. Cursor changes from the page are applied to the viewport item.
 
-The renderer window sits above anything the chrome draws in the same rectangle. Hints that must stay visible over the page are either the status line or a notice drawn by the renderer. The crash page is visible only while that tab has no live child window.
-
-On macOS none of this native frame, cursor, or erase handling runs. The QML underlay (`#0e1017`) is still there. The page is a separate frameless tool window. `place` moves it and orders it above the browser at floating window level. Showing it activates the browser process again so the tab does not steal the menu bar. The first mouse press on the page is what makes that window key.
+On macOS the same compositing path runs. The custom caption does not.
 
 ## Source tree
 
@@ -433,6 +427,7 @@ DOCUMENTATION.md         this file
 
 shared\
   IpcChannel.h/.cpp      newline-delimited JSON over QLocalSocket
+  SharedPixels.h/.cpp    shared-memory frame bitmap
 
 server\                  QmlServer.exe
   main.cpp               command line and document-root search
@@ -449,16 +444,17 @@ nodejs\
 client\                  QmlBrowser.exe
   main.cpp               start URL, type registration, WindowFrame
   WindowFrame.h/.cpp     caption-less frame, Windows only
-  TabManager.h/.cpp      local server, tab list, placement
-  BrowserTab.h/.cpp      one renderer process, history, IPC
+  TabManager.h/.cpp      local server, tab list, viewport size
+  BrowserTab.h/.cpp      one renderer process, history, IPC, frames
   BrowserHistory.h/.cpp  back/forward and address-bar resolution
-  TabViewport.h/.cpp     the rectangle the active renderer fills
+  TabViewport.h/.cpp     draws the active frame inside the browser window
   ui\Browser.qml         chrome
   ui\TabButton.qml ui\ToolButton.qml
   resources.qrc          chrome compiled into the executable
 
 renderer\                QmlRenderer.exe
-  main.cpp               child window on Windows, place and AppKit stacking on macOS, IPC, shortcuts
+  main.cpp               offscreen frame loop, IPC
+  OffscreenPage.h/.cpp   windowless Qt Quick rasterization
   Info.plist.in          LSUIElement so the macOS renderer bundle has no Dock icon
   PageView.h/.cpp        download and instantiate one document
   ui\Renderer.qml        page, spinner, error page, full-screen notice

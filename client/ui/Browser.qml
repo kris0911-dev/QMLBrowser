@@ -438,15 +438,14 @@ Window {
         anchors.left: parent.left
         anchors.right: sourcePanel.left
 
-        // Shown through while a new tab's renderer is still starting. The native
-        // child covers it once that window exists; without this the hole is white.
+        // Shown until the renderer has submitted a frame. The viewport draws
+        // that frame itself; there is no second window covering this rectangle.
         Rectangle {
             anchors.fill: parent
             color: "#0e1017"
         }
 
-        // The active renderer's window is placed over this rectangle. Whatever
-        // QML draws here is only visible when that tab has no live renderer.
+        // Composites the active renderer's latest frame into this window.
         TabViewport {
             id: viewport
             manager: tabs

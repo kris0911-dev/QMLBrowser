@@ -38,6 +38,8 @@ set(CMAKE_AUTORCC ON)
 qt_add_library(qmlbrowser_ipc STATIC
     shared/IpcChannel.cpp
     shared/IpcChannel.h
+    shared/SharedPixels.cpp
+    shared/SharedPixels.h
 )
 target_include_directories(qmlbrowser_ipc PUBLIC "${CMAKE_SOURCE_DIR}/shared")
 target_link_libraries(qmlbrowser_ipc PUBLIC Qt6::Network)
@@ -76,17 +78,13 @@ endif()
 
 qt_add_executable(QmlRenderer
     renderer/main.cpp
+    renderer/OffscreenPage.cpp
+    renderer/OffscreenPage.h
     renderer/PageView.cpp
     renderer/PageView.h
     renderer/resources.qrc
 )
-target_link_libraries(QmlRenderer PRIVATE qmlbrowser_ipc Qt6::Gui Qt6::Qml Qt6::Quick)
-if(UNIX AND NOT APPLE)
-    # X11 only. The macOS build keeps using AppKit and must not look for X11.
-    find_package(X11 REQUIRED)
-    target_link_libraries(QmlRenderer PRIVATE X11::X11)
-    target_compile_definitions(QmlRenderer PRIVATE QMLBROWSER_HAS_X11)
-endif()
+target_link_libraries(QmlRenderer PRIVATE qmlbrowser_ipc Qt6::Gui Qt6::GuiPrivate Qt6::Qml Qt6::Quick)
 
 if(APPLE)
     # Local debugging does not need an Apple Developer team.

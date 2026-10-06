@@ -3,30 +3,21 @@
 #include <QJsonObject>
 #include <QList>
 #include <QObject>
-#include <QPointer>
-#include <QRect>
-#include <QStringList>
-#include <QWindow>
+#include <QSize>
 
-#include <optional>
-
-// The currentTab property exposes BrowserTab to the meta-object system, which
-// needs the complete type rather than a forward declaration.
 #include "BrowserTab.h"
 
 QT_BEGIN_NAMESPACE
-class QAbstractNativeEventFilter;
 class QLocalServer;
-class QTimer;
 QT_END_NAMESPACE
 
 class IpcChannel;
 
 // Owns every tab and the local socket the renderers connect back on.
 //
-// It also does the window management: each renderer draws into its own native
-// child window, and this class is what positions, shows and hides them as the
-// viewport moves or the user switches tab.
+// Each renderer draws into shared memory, not a window. This class tells the
+// active one how big the page area is; TabViewport is what puts the frame on
+// screen inside the browser window.
 class TabManager : public QObject
 {
     Q_OBJECT
@@ -60,13 +51,8 @@ public:
     bool isChromeVisible() const { return m_chromeVisible; }
     void setChromeVisible(bool visible);
 
-    // Set by TabViewport once the browser window has a native handle.
-    void setHostWindow(WId window);
-    // Viewport rectangle in device pixels, relative to the browser window.
-    void setViewportRect(const QRect &rect);
-    // Called every frame. On macOS the page is its own window, so a browser
-    // move has to be forwarded even when the viewport rectangle is unchanged.
-    void syncPlacement();
+    // Page area in logical pixels, plus the browser window's device pixel ratio.
+    void setViewport(const QSize &logicalSize, qreal dpr);
 
     Q_INVOKABLE void addTab(const QString &url = QString());
     Q_INVOKABLE void closeTab(int index);
@@ -96,13 +82,7 @@ private:
     void onNewConnection();
     void onHello(IpcChannel *channel, const QJsonObject &message);
     BrowserTab *tabById(int id) const;
-    QWindow *hostWindow() const;
-    void updatePlacement(bool force = false);
-#ifdef Q_OS_MACOS
-    void beginTitleBarDrag();
-    void followTitleBarDrag();
-    void followPageForward(qint64 pageWindow);
-#endif
+    void updateViewport();
 
     QLocalServer *m_server = nullptr;
     QString m_channelName;
@@ -111,29 +91,9 @@ private:
     int m_currentIndex = -1;
     int m_nextTabId = 1;
 
-    WId m_hostWindow = 0;
-#ifndef Q_OS_WIN
-    // The browser window whose move, screen and activation signals are hooked.
-    // The page is a separate top-level window here, so it has to be told when
-    // the browser moves; nothing is repainted that would report it otherwise.
-    QPointer<QWindow> m_trackedHost;
-#endif
-#ifdef Q_OS_MACOS
-    // AppKit tells the browser about a window drag in batches, a few hundred
-    // milliseconds behind the screen. While the title bar is held, the page is
-    // placed where the pointer has taken the window instead.
-    QAbstractNativeEventFilter *m_mouseDownFilter = nullptr;
-    QTimer *m_dragFollow = nullptr;
-    QTimer *m_dropPrediction = nullptr;
-    QPoint m_dragStartCursor;
-    QPoint m_dragStartFrame;
-    // Top-left of the browser frame, in global points, while it is ahead of
-    // what QWindow reports.
-    std::optional<QPoint> m_predictedFrame;
-#endif
-    QRect m_viewportRect;
+    QSize m_viewport;
+    qreal m_dpr = 1;
     QString m_homeUrl;
-    QStringList m_pendingUrls;
     bool m_fullScreen = false;
     bool m_chromeVisible = true;
 };

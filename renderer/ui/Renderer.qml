@@ -2,15 +2,14 @@ import QtQuick
 import QmlRenderer 1.0
 
 // Everything inside one tab. The browser process owns the chrome around it.
-// On Windows this window is a native child of the viewport. On macOS a window
-// id is not valid in another process, so this stays a top-level window and the
-// browser tells it where to sit.
+// This scene is drawn offscreen: the browser window composites the frame, so
+// there is no renderer window to place or reparent.
 Rectangle {
     id: root
     color: "#0e1017"
 
-    // Set by the browser process. In full screen this window covers the whole
-    // frame, so anything the chrome wants to say has to be said from here.
+    // Set by the browser process. The reminder is drawn into the page frame,
+    // which the browser composites, so it stays above the document.
     property string notice: ""
 
     onNoticeChanged: if (notice.length > 0) noticeTimer.restart()

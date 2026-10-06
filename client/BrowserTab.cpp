@@ -9,11 +9,12 @@
 #include <QJsonObject>
 #include <QProcess>
 
-BrowserTab::BrowserTab(int id, const QString &channelName, WId hostWindow, QObject *parent)
+#include <cstring>
+
+BrowserTab::BrowserTab(int id, const QString &channelName, QObject *parent)
     : QObject(parent)
     , m_id(id)
     , m_channelName(channelName)
-    , m_hostWindow(hostWindow)
     , m_history(new BrowserHistory(this))
 {
     connect(m_history, &BrowserHistory::currentUrlChanged, this, &BrowserTab::sendCurrentUrl);
@@ -31,20 +32,16 @@ BrowserTab::~BrowserTab()
 void BrowserTab::releaseRenderer()
 {
     // Dropping the channel is what tells the renderer to go: it quits as soon
-    // as the socket closes. QProcess::terminate() cannot deliver that message,
-    // because on Windows it posts WM_CLOSE to top-level windows only, and this
-    // renderer's window is a child of the browser's.
+    // as the socket closes. There is no window to post WM_CLOSE to.
     if (m_channel) {
         m_channel->disconnect(this);
         m_channel->close();
         m_channel = nullptr;
     }
 
-    m_childWindow = 0;
     m_rendererPid = 0;
+    m_pixels.detach();
 
-    // Hand the process to the shared shutdown list before clearing the pointer.
-    // Quit reaps every renderer in one wait; a single tab close does not block.
     QProcess *process = m_process;
     m_process = nullptr;
     RendererShutdown::retire(process);
@@ -64,8 +61,6 @@ QString BrowserTab::title() const
 
 namespace {
 
-// Next to this executable on Windows. On macOS the CMake build puts each
-// program in its own bundle, side by side in the build directory.
 QString rendererExecutable()
 {
     const QDir dir(QCoreApplication::applicationDirPath());
@@ -94,11 +89,8 @@ QString rendererExecutable()
 void BrowserTab::startProcess()
 {
     m_crashed = false;
-    m_childWindow = 0;
     m_rendererPid = 0;
-    m_placedVisible = false;
-    m_placedRect = QRect();
-    m_aboveWindow = 0;
+    m_viewportValid = false;
 
     const QString program = rendererExecutable();
 
@@ -106,9 +98,7 @@ void BrowserTab::startProcess()
     RendererShutdown::watch(m_process);
     m_process->setProgram(program);
     m_process->setArguments({ QStringLiteral("--channel"), m_channelName,
-                              QStringLiteral("--tab"), QString::number(m_id),
-                              QStringLiteral("--parent"), QString::number(quint64(m_hostWindow)) });
-    // Renderer diagnostics belong in the browser's console, like chrome's stderr.
+                              QStringLiteral("--tab"), QString::number(m_id) });
     m_process->setProcessChannelMode(QProcess::ForwardedErrorChannel);
 
     connect(m_process, &QProcess::finished, this, &BrowserTab::onProcessFinished);
@@ -123,8 +113,8 @@ void BrowserTab::onProcessFinished(int exitCode, int status)
         return;
 
     m_channel = nullptr;
-    m_childWindow = 0;
     m_rendererPid = 0;
+    m_pixels.detach();
     m_crashed = true;
     m_status = Error;
     m_progress = 1.0;
@@ -135,16 +125,10 @@ void BrowserTab::onProcessFinished(int exitCode, int status)
     emit stateChanged();
 }
 
-bool BrowserTab::isAttached() const
-{
-    return m_channel != nullptr && m_childWindow != 0;
-}
-
-void BrowserTab::attach(IpcChannel *channel, WId childWindow, qint64 pid)
+void BrowserTab::attach(IpcChannel *channel, qint64 pid)
 {
     m_channel = channel;
     RendererShutdown::bindChannel(m_process, channel);
-    m_childWindow = childWindow;
     m_rendererPid = pid;
     m_crashed = false;
 
@@ -153,11 +137,9 @@ void BrowserTab::attach(IpcChannel *channel, WId childWindow, qint64 pid)
     emit attached();
     emit stateChanged();
 
-    // A renderer that has just started knows nothing about the window it landed
-    // in, so tell it before handing over the URL.
     sendChromeState();
+    sendViewport();
 
-    // The renderer came up after the URL was chosen, so deliver it now.
     if (m_history->currentUrl().isValid())
         sendCurrentUrl();
 }
@@ -178,31 +160,45 @@ void BrowserTab::setChromeHidden(bool hidden)
     sendChromeState();
 }
 
-void BrowserTab::place(bool visible, const QRect &screenRect, qint64 aboveWindow, bool force,
-                       bool raisePage)
+void BrowserTab::setViewport(bool visible, const QSize &logicalSize, qreal dpr)
+{
+    if (dpr < 0.5)
+        dpr = 1;
+    if (logicalSize.width() < 1 || logicalSize.height() < 1)
+        visible = false;
+
+    if (m_viewportValid && visible == m_viewportVisible && logicalSize == m_viewportSize
+            && qAbs(dpr - m_viewportDpr) < 0.001)
+        return;
+
+    m_viewportValid = logicalSize.width() > 0 && logicalSize.height() > 0;
+    m_viewportVisible = visible;
+    m_viewportSize = logicalSize;
+    m_viewportDpr = dpr;
+    sendViewport();
+}
+
+void BrowserTab::sendViewport()
+{
+    if (!m_channel || !m_viewportValid)
+        return;
+
+    QJsonObject message;
+    message.insert(QStringLiteral("type"), QStringLiteral("viewport"));
+    message.insert(QStringLiteral("visible"), m_viewportVisible);
+    message.insert(QStringLiteral("width"), m_viewportSize.width());
+    message.insert(QStringLiteral("height"), m_viewportSize.height());
+    message.insert(QStringLiteral("dpr"), m_viewportDpr);
+    m_channel->send(message);
+}
+
+void BrowserTab::postInput(const QJsonObject &event)
 {
     if (!m_channel)
         return;
-    if (!force && visible == m_placedVisible && screenRect == m_placedRect
-            && aboveWindow == m_aboveWindow && raisePage == m_raisePage)
-        return;
 
-    m_placedVisible = visible;
-    m_placedRect = screenRect;
-    m_aboveWindow = aboveWindow;
-    m_raisePage = raisePage;
-
-    QJsonObject message;
-    message.insert(QStringLiteral("type"), QStringLiteral("place"));
-    message.insert(QStringLiteral("visible"), visible);
-    message.insert(QStringLiteral("x"), screenRect.x());
-    message.insert(QStringLiteral("y"), screenRect.y());
-    message.insert(QStringLiteral("width"), screenRect.width());
-    message.insert(QStringLiteral("height"), screenRect.height());
-    // A double keeps an X11 window id intact. JSON integers are 32-bit, and a
-    // window id can have the high bit set. macOS window numbers still fit.
-    message.insert(QStringLiteral("above"), static_cast<double>(aboveWindow));
-    message.insert(QStringLiteral("raise"), raisePage);
+    QJsonObject message = event;
+    message.insert(QStringLiteral("type"), QStringLiteral("input"));
     m_channel->send(message);
 }
 
@@ -218,6 +214,49 @@ void BrowserTab::sendChromeState()
     m_channel->send(message);
 }
 
+void BrowserTab::onFrame(const QJsonObject &message)
+{
+    const int width = message.value(QStringLiteral("width")).toInt();
+    const int height = message.value(QStringLiteral("height")).toInt();
+    const int stride = message.value(QStringLiteral("stride")).toInt();
+    const int format = message.value(QStringLiteral("format")).toInt();
+    const quint32 sequence = quint32(message.value(QStringLiteral("seq")).toDouble());
+    const QString key = message.value(QStringLiteral("shm")).toString();
+
+    const auto acknowledge = [this, sequence] {
+        if (!m_channel)
+            return;
+        QJsonObject ack;
+        ack.insert(QStringLiteral("type"), QStringLiteral("frameAck"));
+        ack.insert(QStringLiteral("seq"), static_cast<double>(sequence));
+        m_channel->send(ack);
+    };
+
+    const qint64 bytes = qint64(stride) * height;
+    if (width < 1 || height < 1 || stride < width * 4 || key.isEmpty() || !m_pixels.attach(key)
+            || bytes > m_pixels.size() || !m_pixels.lock()) {
+        acknowledge();
+        return;
+    }
+
+    const QImage::Format imageFormat = format == 2 ? QImage::Format_ARGB32_Premultiplied
+                                                   : QImage::Format_RGBA8888_Premultiplied;
+    QImage image(width, height, imageFormat);
+    const uchar *source = m_pixels.data();
+    const int rowBytes = width * 4;
+    if (image.bytesPerLine() == stride) {
+        memcpy(image.bits(), source, size_t(stride) * size_t(height));
+    } else {
+        for (int y = 0; y < height; ++y)
+            memcpy(image.scanLine(y), source + y * stride, size_t(rowBytes));
+    }
+    m_pixels.unlock();
+
+    m_frame = image;
+    emit frameChanged();
+    acknowledge();
+}
+
 void BrowserTab::onMessage(const QJsonObject &message)
 {
     const QString type = message.value(QStringLiteral("type")).toString();
@@ -230,8 +269,15 @@ void BrowserTab::onMessage(const QJsonObject &message)
         m_errorString = message.value(QStringLiteral("error")).toString();
         m_byteCount = message.value(QStringLiteral("bytes")).toInt();
         emit stateChanged();
+    } else if (type == QLatin1String("frame")) {
+        onFrame(message);
+    } else if (type == QLatin1String("cursor")) {
+        const int shape = message.value(QStringLiteral("shape")).toInt();
+        if (shape == m_cursorShape)
+            return;
+        m_cursorShape = shape;
+        emit cursorChanged(shape);
     } else if (type == QLatin1String("navigate")) {
-        // A link inside the page. History lives here, not in the renderer.
         navigateTo(QUrl(message.value(QStringLiteral("url")).toString()));
     } else if (type == QLatin1String("source")) {
         m_sourceText = message.value(QStringLiteral("text")).toString();
@@ -240,8 +286,6 @@ void BrowserTab::onMessage(const QJsonObject &message)
         emit shortcutRequested(message.value(QStringLiteral("key")).toString());
     } else if (type == QLatin1String("fullscreen")) {
         emit fullScreenRequested(message.value(QStringLiteral("on")).toBool());
-    } else if (type == QLatin1String("pagePressed")) {
-        emit pagePressed(qint64(message.value(QStringLiteral("window")).toDouble()));
     }
 }
 
@@ -261,7 +305,6 @@ void BrowserTab::sendCurrentUrl()
 void BrowserTab::navigateTo(const QUrl &url)
 {
     if (m_crashed) {
-        // Reviving the tab picks the URL up once the new renderer connects.
         m_history->navigateTo(url);
         restart();
         return;
@@ -310,5 +353,7 @@ void BrowserTab::restart()
 
     m_status = Null;
     m_errorString.clear();
+    m_frame = QImage();
+    emit frameChanged();
     startProcess();
 }

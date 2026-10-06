@@ -58,7 +58,7 @@ In Xcode choose the **QmlServer** scheme and Run it, then the **QmlBrowser** sch
 
 Qt Creator can open `CMakeLists.txt` and use the `macos-debug` preset (Ninja, `CMAKE_BUILD_TYPE=Debug`). The same `QTDIR` is required. Run `QmlServer`, then debug `QmlBrowser`.
 
-A macOS window id is a pointer in one process, so the browser cannot place the page with `SetWindowPos`. The renderer is a frameless `Qt::Tool` window. `place` moves it in global logical pixels and passes `above`, the browser window's `NSWindow` number, so the page stacks over the browser. The renderer bundle is an agent (`LSUIElement`): no Dock icon per tab. It does not become the key window until the page is clicked, and after a show it activates the browser again. The custom caption, the native white-flash fill, and the resize-cursor reset stay Windows-only.
+The renderer has no window on either platform. It rasterizes into shared memory and the browser window draws that frame, so a tab does not get a Dock icon (`LSUIElement` on the renderer bundle) and does not have to be stacked over the browser. The custom caption stays Windows-only.
 
 The Node server also runs here, with Node.js 18 or newer and no packages:
 
@@ -108,7 +108,7 @@ resize border, snapping and the shadow.
 Each tab keeps its own history, and the status line on the right reports the
 HTTP status, document size and the process id of the tab you are looking at.
 The shortcuts work whether the keyboard focus is in the browser chrome or in the
-page: a renderer that sees one of them hands it back instead of swallowing it.
+page. They belong to the browser window, so a focused page does not swallow them.
 
 Full screen hides the tab strip, toolbar and status line and gives the whole
 monitor to the page. Leaving it returns the window to whatever it was before,
@@ -204,6 +204,7 @@ CMakePresets.json          macos-debug and macos-xcode, deployment target 11.0
 build-macos.sh             Xcode Debug build from QTDIR
 shared\
   IpcChannel.h/.cpp       newline-delimited JSON over QLocalSocket, used by both sides
+  SharedPixels.h/.cpp     shared-memory bitmap a renderer submits and the browser draws
 server\
   main.cpp                CLI, document-root discovery
   HttpServer.h/.cpp       QTcpServer; GET/HEAD, keep-alive, MIME, directory listings
@@ -214,15 +215,16 @@ server\
 client\                   QmlBrowser.exe — the browser window
   main.cpp                QGuiApplication, type registration, start URL
   WindowFrame.h/.cpp      custom caption: tab strip replaces the Windows title bar
-  TabManager.h/.cpp       QLocalServer, the tab list, child windows on Windows and place on macOS
-  BrowserTab.h/.cpp       one renderer process: QProcess + IPC channel + history
+  TabManager.h/.cpp       QLocalServer, the tab list, viewport size
+  BrowserTab.h/.cpp       one renderer process: QProcess + IPC channel + history + frames
   BrowserHistory.h/.cpp   back/forward stack and URL normalisation
-  TabViewport.h/.cpp      the hole in the chrome where the active renderer sits
+  TabViewport.h/.cpp      draws the active tab's frame inside the browser window
   ui\Browser.qml          tab strip, toolbar, address bar, crash page, source panel
   ui\TabButton.qml ui\ToolButton.qml
   resources.qrc           chrome compiled into the exe via rcc
 renderer\                 QmlRenderer.exe — one instance per tab
-  main.cpp                child window on Windows, place/stacking on macOS, IPC plumbing
+  main.cpp                offscreen frame loop and IPC plumbing
+  OffscreenPage.h/.cpp    windowless Qt Quick rasterization into shared memory
   Info.plist.in           macOS agent bundle so a tab has no Dock icon
   PageView.h/.cpp         QQuickItem that downloads and instantiates remote QML
   ui\Renderer.qml         the page plus its loading spinner and error page
@@ -232,25 +234,20 @@ renderer\                 QmlRenderer.exe — one instance per tab
 ## How a tab works
 
 The browser process listens on a `QLocalServer` named `qmlbrowser-<pid>-<uuid>`.
-Opening a tab starts `QmlRenderer --channel <name> --tab <id> --parent <winid>`.
-On Windows that executable is `QmlRenderer.exe`. On macOS it is
-`QmlRenderer.app`. The renderer connects back and reports its own window handle
-in a `hello` message, sent on the next event-loop turn so a macOS show is not
-swallowed by `waitForConnected`. On Windows it reparents its `QQuickView` into
-the browser window with `QWindow::fromWinId()` and `QWindow::setParent()`. On
-macOS `--parent` is ignored, because that id is a pointer in the browser
-process.
+Opening a tab starts `QmlRenderer --channel <name> --tab <id>`. On Windows that
+executable is `QmlRenderer.exe`. On macOS it is `QmlRenderer.app`. The renderer
+connects back and sends `hello` with its process id. It never creates a window.
 
-From then on the two processes split the work along one line. The renderer
-pushes coalesced `state`, `source`, `navigate` and `fullscreen` messages; the
-browser replies with `navigate`, `reload`, `stop` and `chrome`. On Windows
-**geometry does not travel on the socket.** Placement and tab switching use
-`SetWindowPos` and `ShowWindow` on the renderer's window handle, so dragging
-the browser window never waits on a round trip. On macOS the same rectangle is
-sent as `place` (`visible`, `x`, `y`, `width`, `height`, `above`), because the
-renderer's window id is not valid in the browser process. `TabViewport`
-recomputes that rectangle on `QQuickWindow::afterAnimating`, which is the only
-reliable signal that an anchored item's scene position has changed.
+Drawing follows the same split Chromium uses. The renderer rasterizes the Qt
+Quick scene with `QQuickRenderControl` into an offscreen texture, copies the
+pixels into shared memory, and submits a `frame`. `TabViewport`, inside the
+browser window, uploads that bitmap into the browser's scene graph. Moving or
+resizing the window moves the page with it, because the page is pixels in that
+window rather than a second window being dragged along. The browser sends
+`viewport` (logical size, device pixel ratio, and whether the tab is the
+visible one) and forwards pointer and key events as `input`, since the
+renderer has nothing on screen to click. A `frameAck` lets the renderer reuse
+that shared-memory slot.
 
 If a renderer exits for any reason, `BrowserTab` records the exit code and the
 tab shows a recovery page; **Reload tab** launches a fresh process into the same
@@ -271,12 +268,10 @@ server returns an HTML error body.
 
 ## Notes
 
-* The renderer's window is a real native child window, so it sits on top of
-  anything the browser chrome draws inside the viewport rectangle. That is why
-  toolbar hints go to the status line instead of a popup tooltip, why the crash
-  page is only visible while the tab has no live renderer, and why the "press
-  F11 to leave full screen" reminder is sent over the `chrome` message and drawn
-  by the renderer rather than by the window that owns the shortcut.
+* The page is a frame inside the browser window, so the crash page can be drawn
+  over it by the chrome. The "press F11 to leave full screen" reminder is still
+  sent over the `chrome` message and drawn into the page frame. Toolbar hints
+  stay on the status line.
 * Every page load also produces one `404 /qmldir` line in the server log. That is
   the QML engine probing for a directory module next to the document; it is
   expected and harmless.

@@ -1,17 +1,18 @@
 #pragma once
 
+#include <QImage>
+#include <QMutex>
 #include <QPointer>
 #include <QQuickItem>
 
 #include "TabManager.h"
 
-// A hole in the browser chrome where the active renderer's window is shown.
+// The page area inside the browser window.
 //
-// This item paints nothing. It reports its position and size, in device pixels
-// relative to the browser window, to the TabManager. On Windows that rectangle
-// is passed to SetWindowPos on the child HWND. On macOS the same numbers are
-// converted back to logical screen coordinates and sent as a `place` message,
-// because the renderer's window id is a pointer in the other process.
+// The renderer process has no window of its own. It submits a frame, and this
+// item draws that frame in the browser's scene graph, which is why the page
+// moves with the window. Pointer and key events are forwarded to the renderer
+// because there is nothing else on screen to receive them.
 class TabViewport : public QQuickItem
 {
     Q_OBJECT
@@ -30,9 +31,30 @@ signals:
 protected:
     void geometryChange(const QRectF &newGeometry, const QRectF &oldGeometry) override;
     void itemChange(ItemChange change, const ItemChangeData &value) override;
+    QSGNode *updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *data) override;
+
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void mouseDoubleClickEvent(QMouseEvent *event) override;
+    void wheelEvent(QWheelEvent *event) override;
+    void hoverMoveEvent(QHoverEvent *event) override;
+    void hoverLeaveEvent(QHoverEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
+    void keyReleaseEvent(QKeyEvent *event) override;
+    void focusInEvent(QFocusEvent *event) override;
+    void focusOutEvent(QFocusEvent *event) override;
 
 private:
     void publish();
+    void bindCurrentTab();
+    void adoptFrame();
+    void postMouse(const QString &action, QMouseEvent *event);
+    void postKey(const QString &action, QKeyEvent *event);
+    BrowserTab *currentTab() const;
 
     QPointer<TabManager> m_manager;
+    QPointer<BrowserTab> m_tab;
+    QImage m_frame;
+    QMutex m_mutex;
 };
