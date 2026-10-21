@@ -53,6 +53,7 @@ private:
     void adoptFrame();
     void postMouse(const QString &action, QMouseEvent *event);
     void postKey(const QString &action, QKeyEvent *event);
+    void postFocus(BrowserTab *tab, bool on);
     void syncInputMethod(int queries, bool focusMoved);
     BrowserTab *currentTab() const;
 

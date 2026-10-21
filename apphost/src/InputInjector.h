@@ -65,9 +65,11 @@ private:
     void activate(QWidget *window);
     void hoverWindow(QWidget *window, const QPointF &global);
     void onFocusObjectChanged();
+    void reassertFocus();
 
     WindowCompositor *m_windows = nullptr;
     QTimer *m_cursorTimer = nullptr;
+    QTimer *m_focusTimer = nullptr;
     QElapsedTimer m_clock;
 
     bool m_focused = false;

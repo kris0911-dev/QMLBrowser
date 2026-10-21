@@ -109,9 +109,25 @@
     <RendererQmlDirs Condition="Exists('$(QtDir)\qml\QtQuick3D')">$(RendererQmlDirs) --qmldir &quot;$(ProjectDir)deploy\quick3d&quot;</RendererQmlDirs>
   </PropertyGroup>
 
-  <Target Name="DeployQtRuntime" AfterTargets="Link">
-    <Exec Condition="!Exists('$(OutDir)qtdeploy_renderer.stamp')"
-          Command="&quot;$(QtBin)\windeployqt.exe&quot; $(RendererQmlDirs) --no-translations --no-compiler-runtime &quot;$(TargetPath)&quot;" />
+  <!--
+    windeployqt runs again when the QML it scans or this project changes,
+    and when a module the site needs is missing from the output folder.
+    Deploying only while the stamp was absent left output folders made
+    before deploy\site existed without Qt Quick Controls, and every page
+    importing it failed to load.
+  -->
+  <ItemGroup>
+    <RendererDeployInput Include="$(MSBuildProjectFullPath);$(ProjectDir)ui\**\*.qml;$(ProjectDir)deploy\**\*.qml" />
+  </ItemGroup>
+
+  <Target Name="CheckQtRuntime" BeforeTargets="DeployQtRuntime">
+    <Delete Files="$(OutDir)qtdeploy_renderer.stamp"
+            Condition="!Exists('$(OutDir)qml\QtQuick\Controls\Basic\qmldir') Or !Exists('$(OutDir)qml\QtQuick\Templates\qmldir') Or (Exists('$(QtDir)\qml\QtQuick3D') And !Exists('$(OutDir)qml\QtQuick3D\qmldir'))" />
+  </Target>
+
+  <Target Name="DeployQtRuntime" AfterTargets="Link"
+          Inputs="@(RendererDeployInput)" Outputs="$(OutDir)qtdeploy_renderer.stamp">
+    <Exec Command="&quot;$(QtBin)\windeployqt.exe&quot; $(RendererQmlDirs) --no-translations --no-compiler-runtime &quot;$(TargetPath)&quot;" />
     <Touch Files="$(OutDir)qtdeploy_renderer.stamp" AlwaysCreate="true" />
   </Target>
 

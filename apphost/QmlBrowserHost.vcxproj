@@ -45,8 +45,13 @@
 
   <ItemDefinitionGroup>
     <ClCompile>
-      <!-- QtGuiPrivateInclude (qt.props) holds qpa/qwindowsysteminterface.h. -->
-      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)src;$(RepoRoot)shared;$(QtInclude)\QtCore;$(QtInclude)\QtGui;$(QtGuiPrivateInclude);$(QtInclude)\QtNetwork;$(QtInclude)\QtWidgets;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <!--
+        QtGuiPrivateInclude (qt.props) holds qpa/qwindowsysteminterface.h.
+        private/qhighdpiscaling_p.h also includes QtGui/private/... and
+        QtCore/private/... headers, so the version folders are on the path
+        too, as Qt6::GuiPrivate puts them in the CMake build.
+      -->
+      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)src;$(RepoRoot)shared;$(QtInclude)\QtCore;$(QtInclude)\QtCore\$(QtVersion);$(QtInclude)\QtCore\$(QtVersion)\QtCore;$(QtInclude)\QtGui;$(QtInclude)\QtGui\$(QtVersion);$(QtGuiPrivateInclude);$(QtInclude)\QtNetwork;$(QtInclude)\QtWidgets;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
   </ItemDefinitionGroup>
 

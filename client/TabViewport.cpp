@@ -94,8 +94,12 @@ void TabViewport::publish()
 
 void TabViewport::bindCurrentTab()
 {
-    if (m_tab)
+    if (m_tab) {
         disconnect(m_tab, nullptr, this, nullptr);
+        // The tab going to the background loses the keyboard with it.
+        if (hasActiveFocus())
+            postFocus(m_tab, false);
+    }
 
     m_tab = m_manager ? m_manager->currentTab() : nullptr;
     syncInputMethod(int(Qt::ImQueryAll), true);
@@ -103,6 +107,21 @@ void TabViewport::bindCurrentTab()
         adoptFrame();
         return;
     }
+
+    // Focus is only reported when it changes here, so a process that was not
+    // listening at that moment must be told. That is a tab brought to the
+    // front while the page area has the keyboard, and a process that starts
+    // behind a focused page area: the first renderer, a reload, or a link to
+    // an app:// address, which replaces the process without the viewport
+    // losing focus. Without it the app stays inactive: keys reach it, but it
+    // draws no focus ring or caret until the window is deactivated and
+    // activated again.
+    if (hasActiveFocus())
+        postFocus(m_tab, true);
+    connect(m_tab, &BrowserTab::attached, this, [this] {
+        if (hasActiveFocus())
+            postFocus(m_tab, true);
+    });
 
     connect(m_tab, &BrowserTab::inputMethodChanged, this, &TabViewport::syncInputMethod);
 
@@ -379,26 +398,24 @@ void TabViewport::keyReleaseEvent(QKeyEvent *event)
     postKey(QStringLiteral("release"), event);
 }
 
+void TabViewport::postFocus(BrowserTab *tab, bool on)
+{
+    if (!tab)
+        return;
+    QJsonObject message;
+    message.insert(QStringLiteral("kind"), QStringLiteral("focus"));
+    message.insert(QStringLiteral("on"), on);
+    tab->postInput(message);
+}
+
 void TabViewport::focusInEvent(QFocusEvent *event)
 {
-    BrowserTab *tab = currentTab();
-    if (tab) {
-        QJsonObject message;
-        message.insert(QStringLiteral("kind"), QStringLiteral("focus"));
-        message.insert(QStringLiteral("on"), true);
-        tab->postInput(message);
-    }
+    postFocus(currentTab(), true);
     QQuickItem::focusInEvent(event);
 }
 
 void TabViewport::focusOutEvent(QFocusEvent *event)
 {
-    BrowserTab *tab = currentTab();
-    if (tab) {
-        QJsonObject message;
-        message.insert(QStringLiteral("kind"), QStringLiteral("focus"));
-        message.insert(QStringLiteral("on"), false);
-        tab->postInput(message);
-    }
+    postFocus(currentTab(), false);
     QQuickItem::focusOutEvent(event);
 }

@@ -14,11 +14,28 @@
 #include <QWidget>
 #include <QWindow>
 
+#include <private/qhighdpiscaling_p.h>
 #include <qpa/qwindowsysteminterface.h>
 
 namespace {
 
 using Sync = QWindowSystemInterface::SynchronousDelivery;
+
+// QWindowSystemInterface takes positions in native pixels, the way a
+// platform plugin reports them, and scales them down to device-independent
+// ones itself. The browser sends device-independent positions. On macOS and
+// on the offscreen platform the two are the same; on Windows, where Qt does
+// the scaling instead of the platform, a 125% display would otherwise move
+// every click towards the top-left corner by a fifth.
+QPointF nativeLocal(const QPointF &local, const QWindow *window)
+{
+    return QHighDpi::toNativeLocalPosition(local, window);
+}
+
+QPointF nativeGlobal(const QPointF &global, const QWindow *window)
+{
+    return QHighDpi::toNativeGlobalPosition(global, window);
+}
 
 QPointF pointFrom(const QJsonObject &message)
 {
@@ -78,6 +95,28 @@ InputInjector::InputInjector(WindowCompositor *windows, QObject *parent)
     m_cursorTimer->setSingleShot(true);
     m_cursorTimer->setInterval(0);
     connect(m_cursorTimer, &QTimer::timeout, this, &InputInjector::updateCursor);
+
+    // In GPU mode the native platform reports activation too, from what the
+    // window system tells this process, which knows nothing of the browser.
+    // On Windows it can deactivate the application, or leave it without a
+    // focus window, while the tab has the keyboard: keys still arrive, but
+    // no focus ring or caret is drawn until the browser window is
+    // deactivated and activated again. The browser's focus is the one that
+    // counts, so it is put back, on the next turn of the loop, after the
+    // platform's own change has been processed.
+    m_focusTimer = new QTimer(this);
+    m_focusTimer->setSingleShot(true);
+    m_focusTimer->setInterval(0);
+    connect(m_focusTimer, &QTimer::timeout, this, &InputInjector::reassertFocus);
+    connect(qApp, &QGuiApplication::applicationStateChanged, this,
+            [this](Qt::ApplicationState state) {
+                if (m_focused && state != Qt::ApplicationActive)
+                    m_focusTimer->start();
+            });
+    connect(qApp, &QGuiApplication::focusWindowChanged, this, [this](QWindow *window) {
+        if (m_focused && !window)
+            m_focusTimer->start();
+    });
 
     qApp->installEventFilter(this);
     connect(qApp, &QGuiApplication::focusObjectChanged, this,
@@ -182,8 +221,10 @@ void InputInjector::hoverWindow(QWidget *window, const QPointF &global)
         QWindowSystemInterface::handleLeaveEvent<Sync>(m_hoverWindow->windowHandle());
     m_hoverWindow = window;
     if (window && window->windowHandle()) {
+        QWindow *handle = window->windowHandle();
         QWindowSystemInterface::handleEnterEvent<Sync>(
-                window->windowHandle(), global - QPointF(window->geometry().topLeft()), global);
+                handle, nativeLocal(global - QPointF(window->geometry().topLeft()), handle),
+                nativeGlobal(global, handle));
     }
 }
 
@@ -229,10 +270,11 @@ void InputInjector::deliverMouse(QEvent::Type type, const QJsonObject &message)
         hoverWindow(target, global);
 
     m_lastGlobal = global;
+    QWindow *handle = target->windowHandle();
     const QPointF local = global - QPointF(target->geometry().topLeft());
     QWindowSystemInterface::handleMouseEvent<Sync>(
-            target->windowHandle(), ulong(m_clock.elapsed()), local, global, buttons, button,
-            type, modsFrom(message));
+            handle, ulong(m_clock.elapsed()), nativeLocal(local, handle),
+            nativeGlobal(global, handle), buttons, button, type, modsFrom(message));
     updateCursor();
 }
 
@@ -248,9 +290,11 @@ void InputInjector::deliverWheel(const QJsonObject &message)
                        message.value(QStringLiteral("py")).toInt());
     const QPoint angle(message.value(QStringLiteral("ax")).toInt(),
                        message.value(QStringLiteral("ay")).toInt());
+    QWindow *handle = target->windowHandle();
     QWindowSystemInterface::handleWheelEvent(
-            target->windowHandle(), ulong(m_clock.elapsed()),
-            global - QPointF(target->geometry().topLeft()), global, pixel, angle,
+            handle, ulong(m_clock.elapsed()),
+            nativeLocal(global - QPointF(target->geometry().topLeft()), handle),
+            nativeGlobal(global, handle), pixel, angle,
             modsFrom(message), Qt::ScrollPhase(message.value(QStringLiteral("phase")).toInt()),
             Qt::MouseEventNotSynthesized, message.value(QStringLiteral("inverted")).toBool());
     m_lastGlobal = global;
@@ -329,6 +373,18 @@ void InputInjector::deliverFocus(bool on)
     }
     if (QGuiApplication::focusWindow())
         QWindowSystemInterface::handleFocusWindowChanged<Sync>(nullptr, Qt::ActiveWindowFocusReason);
+}
+
+void InputInjector::reassertFocus()
+{
+    if (!m_focused)
+        return;
+    if (QGuiApplication::applicationState() != Qt::ApplicationActive)
+        QWindowSystemInterface::handleApplicationStateChanged<Sync>(Qt::ApplicationActive);
+    if (!QGuiApplication::focusWindow()) {
+        QWidget *modal = m_windows->activeModal();
+        activate(modal ? modal : m_windows->mainWindow());
+    }
 }
 
 void InputInjector::deliverInputMethod(const QJsonObject &message)

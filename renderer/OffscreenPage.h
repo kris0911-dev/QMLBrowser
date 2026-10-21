@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QElapsedTimer>
 #include <QJsonObject>
 #include <QObject>
 #include <QPointF>
@@ -66,6 +67,7 @@ private:
     QString prepareSlot(int index, int bytes);
     void ensureActive();
     void publishCursor();
+    quint64 eventTime() const;
     void deliverMouse(QEvent::Type type, const QJsonObject &message);
     void deliverWheel(const QJsonObject &message);
     void deliverHover(const QJsonObject &message);
@@ -86,6 +88,8 @@ private:
     QRhiTextureRenderTarget *m_target = nullptr;
     QRhiRenderPassDescriptor *m_pass = nullptr;
     QTimer *m_renderTimer = nullptr;
+    // Timestamps for the input events made here, see eventTime().
+    QElapsedTimer m_inputClock;
 
     struct Slot {
         SharedPixels pixels;
