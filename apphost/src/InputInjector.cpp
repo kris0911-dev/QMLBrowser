@@ -311,6 +311,14 @@ void InputInjector::deliverKey(QEvent::Type type, const QJsonObject &message)
 void InputInjector::deliverFocus(bool on)
 {
     m_focused = on;
+    // The application is active while its tab has focus, as the browser is.
+    // In GPU mode the process itself never becomes the active application,
+    // and the native platform treats a popup opened by an inactive
+    // application as one shown over another program: on macOS it then closes
+    // the popup on any real mouse press, which is every click the user makes
+    // in the browser, before the forwarded click can reach the popup.
+    QWindowSystemInterface::handleApplicationStateChanged<Sync>(
+            on ? Qt::ApplicationActive : Qt::ApplicationInactive);
     if (on) {
         // The page area took keyboard focus: the app becomes the active
         // application, so the caret blinks and selections turn blue.
