@@ -282,7 +282,7 @@ Page {
             text: "app://widgets is not a document. It is a separate Qt Widgets program that " +
                   "paints its windows, menus and dialogs into shared memory and takes input " +
                   "from the browser over the same socket this page uses. Controls, painting, " +
-                  "pictures, vector graphics and video, each one address."
+                  "pictures, vector graphics, video and 3D, each one address."
             color: "#98a2b8"
             font.pixelSize: 15
             font.family: "Segoe UI"
@@ -295,6 +295,30 @@ Page {
             NavLink { text: "Paint"; url: "app://widgets/paint" }
             NavLink { text: "Vectors"; url: "app://widgets/vectors" }
             NavLink { text: "Video"; url: "app://widgets/video" }
+            NavLink { text: "3D"; url: "app://widgets/3d" }
+        }
+    }
+
+    Card {
+        title: "3D"
+        accent: "#7ce3b0"
+
+        Text {
+            width: parent.width
+            text: "A page can hold a real 3D scene: Qt Quick 3D with lights, shadows and " +
+                  "physically based materials, drawn by the renderer on Metal or Direct3D. " +
+                  "The widget app has an OpenGL view as well, read back from the GPU into " +
+                  "its tab."
+            color: "#98a2b8"
+            font.pixelSize: 15
+            font.family: "Segoe UI"
+            wrapMode: Text.WordWrap
+        }
+
+        Row {
+            spacing: 22
+            NavLink { text: "3D in a page →"; url: "3d.qml"; color: "#7ce3b0" }
+            NavLink { text: "OpenGL in the widget app"; url: "app://widgets/3d" }
         }
     }
 

@@ -3,8 +3,11 @@
 #include "ControlsPage.h"
 #include "PaintPage.h"
 #include "PicturePage.h"
+#include "ScenePage.h"
 #include "VectorPage.h"
 #include "VideoPage.h"
+
+#include <QmlBrowserHost.h>
 
 #include <QAction>
 #include <QApplication>
@@ -35,11 +38,13 @@ GalleryWindow::GalleryWindow(bool hosted, QWidget *parent)
     m_pictures = new PicturePage;
     m_vectors = new VectorPage;
     m_video = new VideoPage;
+    m_scene = new ScenePage;
     m_tabs->addTab(m_controls, QStringLiteral("Controls"));
     m_tabs->addTab(m_paint, QStringLiteral("Paint"));
     m_tabs->addTab(m_pictures, QStringLiteral("Pictures"));
     m_tabs->addTab(m_vectors, QStringLiteral("Vectors"));
     m_tabs->addTab(m_video, QStringLiteral("Video"));
+    m_tabs->addTab(m_scene, QStringLiteral("3D"));
     setCentralWidget(m_tabs);
 
     connect(m_controls, &ControlsPage::message, this, &GalleryWindow::showMessage);
@@ -47,6 +52,7 @@ GalleryWindow::GalleryWindow(bool hosted, QWidget *parent)
     connect(m_pictures, &PicturePage::message, this, &GalleryWindow::showMessage);
     connect(m_vectors, &VectorPage::message, this, &GalleryWindow::showMessage);
     connect(m_video, &VideoPage::message, this, &GalleryWindow::showMessage);
+    connect(m_scene, &ScenePage::message, this, &GalleryWindow::showMessage);
 
     connect(m_tabs, &QTabWidget::currentChanged, this, [this](int index) {
         // The video keeps its position but stops running on a hidden page.
@@ -61,7 +67,9 @@ GalleryWindow::GalleryWindow(bool hosted, QWidget *parent)
     m_platform = new QLabel(QStringLiteral("Qt %1  ·  %2 platform%3")
                                     .arg(QLatin1String(qVersion()),
                                          QGuiApplication::platformName(),
-                                         hosted ? QStringLiteral("  ·  hosted in QmlBrowser")
+                                         hosted ? QmlBrowserHost::graphics() == QmlBrowserHost::Graphics::Gpu
+                                                          ? QStringLiteral("  ·  hosted in QmlBrowser, GPU mode")
+                                                          : QStringLiteral("  ·  hosted in QmlBrowser, software mode")
                                                 : QString()));
     m_platform->setContentsMargins(8, 0, 8, 0);
     statusBar()->addPermanentWidget(m_platform);
@@ -73,7 +81,7 @@ GalleryWindow::GalleryWindow(bool hosted, QWidget *parent)
 QStringList GalleryWindow::pageNames()
 {
     return { QStringLiteral("controls"), QStringLiteral("paint"), QStringLiteral("pictures"),
-             QStringLiteral("vectors"), QStringLiteral("video") };
+             QStringLiteral("vectors"), QStringLiteral("video"), QStringLiteral("3d") };
 }
 
 QString GalleryWindow::pageName() const
@@ -116,7 +124,7 @@ void GalleryWindow::buildMenus()
     QMenu *view = menuBar()->addMenu(QStringLiteral("&View"));
     const QStringList labels = { QStringLiteral("&Controls"), QStringLiteral("&Paint"),
                                  QStringLiteral("P&ictures"), QStringLiteral("&Vectors"),
-                                 QStringLiteral("Vi&deo") };
+                                 QStringLiteral("Vi&deo"), QStringLiteral("&3D") };
     for (int i = 0; i < labels.size(); ++i) {
         QAction *action = view->addAction(labels.at(i), this,
                                           [this, i] { m_tabs->setCurrentIndex(i); });

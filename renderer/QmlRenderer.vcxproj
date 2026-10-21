@@ -98,9 +98,20 @@
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 
+  <!--
+    Pages are downloaded at run time, so windeployqt cannot see what they
+    import. deploy\site lists the modules the sample site needs from every
+    Qt kit (Qt Quick Controls), and deploy\quick3d adds Qt Quick 3D when the
+    kit has it, for 3d.qml.
+  -->
+  <PropertyGroup>
+    <RendererQmlDirs>--qmldir &quot;$(ProjectDir)ui&quot; --qmldir &quot;$(ProjectDir)deploy\site&quot;</RendererQmlDirs>
+    <RendererQmlDirs Condition="Exists('$(QtDir)\qml\QtQuick3D')">$(RendererQmlDirs) --qmldir &quot;$(ProjectDir)deploy\quick3d&quot;</RendererQmlDirs>
+  </PropertyGroup>
+
   <Target Name="DeployQtRuntime" AfterTargets="Link">
     <Exec Condition="!Exists('$(OutDir)qtdeploy_renderer.stamp')"
-          Command="&quot;$(QtBin)\windeployqt.exe&quot; --qmldir &quot;$(ProjectDir)ui&quot; --no-translations --no-compiler-runtime &quot;$(TargetPath)&quot;" />
+          Command="&quot;$(QtBin)\windeployqt.exe&quot; $(RendererQmlDirs) --no-translations --no-compiler-runtime &quot;$(TargetPath)&quot;" />
     <Touch Files="$(OutDir)qtdeploy_renderer.stamp" AlwaysCreate="true" />
   </Target>
 

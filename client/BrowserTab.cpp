@@ -1,11 +1,10 @@
 #include "BrowserTab.h"
 
+#include "AppRegistry.h"
 #include "IpcChannel.h"
 #include "RendererShutdown.h"
 
 #include <QCoreApplication>
-#include <QDir>
-#include <QFileInfo>
 #include <QJsonObject>
 #include <QProcess>
 
@@ -66,61 +65,28 @@ QString BrowserTab::title() const
     return QStringLiteral("New tab");
 }
 
-namespace {
-
-// QmlRenderer or WidgetApp, next to the browser executable (or, on macOS,
-// next to the browser's app bundle).
-QString helperExecutable(const QString &name)
-{
-    const QDir dir(QCoreApplication::applicationDirPath());
-#if defined(Q_OS_WIN)
-    return dir.absoluteFilePath(name + QStringLiteral(".exe"));
-#elif defined(Q_OS_MACOS)
-    const QString beside = dir.absoluteFilePath(name);
-    if (QFileInfo::exists(beside))
-        return beside;
-
-    QDir root(dir);
-    if (root.cdUp() && root.cdUp() && root.cdUp()) {
-        const QString bundled = root.absoluteFilePath(
-                name + QStringLiteral(".app/Contents/MacOS/") + name);
-        if (QFileInfo::exists(bundled))
-            return bundled;
-    }
-    return beside;
-#else
-    return dir.absoluteFilePath(name);
-#endif
-}
-
-} // namespace
-
-BrowserTab::Engine BrowserTab::engineFor(const QUrl &url)
-{
-    // Only app://widgets is an application. Any other app:// address goes to
-    // the renderer, which shows its error page for an unknown scheme.
-    if (url.scheme() == QLatin1String("app")
-            && url.host().compare(QLatin1String("widgets"), Qt::CaseInsensitive) == 0) {
-        return Engine::WidgetApp;
-    }
-    return Engine::QmlRenderer;
-}
-
 void BrowserTab::startProcess()
 {
     m_crashed = false;
     m_rendererPid = 0;
     m_viewportValid = false;
 
-    const QString program = helperExecutable(m_engine == Engine::WidgetApp
-                                                     ? QStringLiteral("WidgetApp")
-                                                     : QStringLiteral("QmlRenderer"));
+    QString program;
+    QStringList arguments;
+    if (m_app.isEmpty()) {
+        program = AppRegistry::bundledProgram(QStringLiteral("QmlRenderer"));
+    } else {
+        const AppRegistry::App app = AppRegistry::find(m_app);
+        program = app.program;
+        arguments = app.arguments;
+    }
+    arguments << QStringLiteral("--channel") << m_channelName
+              << QStringLiteral("--tab") << QString::number(m_id);
 
     m_process = new QProcess(this);
     RendererShutdown::watch(m_process);
     m_process->setProgram(program);
-    m_process->setArguments({ QStringLiteral("--channel"), m_channelName,
-                              QStringLiteral("--tab"), QString::number(m_id) });
+    m_process->setArguments(arguments);
     m_process->setProcessChannelMode(QProcess::ForwardedErrorChannel);
 
     connect(m_process, &QProcess::finished, this, &BrowserTab::onProcessFinished);
@@ -141,8 +107,8 @@ void BrowserTab::onProcessFinished(int exitCode, int status)
     m_crashed = true;
     m_status = Error;
     m_progress = 1.0;
-    const QString what = m_engine == Engine::WidgetApp ? QStringLiteral("application")
-                                                        : QStringLiteral("renderer");
+    const QString what = m_app.isEmpty() ? QStringLiteral("renderer")
+                                         : QStringLiteral("application");
     m_errorString = status == QProcess::CrashExit
             ? QStringLiteral("The %1 process for this tab terminated unexpectedly.").arg(what)
             : QStringLiteral("The %1 process for this tab exited with code %2.").arg(what).arg(exitCode);
@@ -355,12 +321,12 @@ void BrowserTab::sendCurrentUrl()
 {
     emit stateChanged();
 
-    // Moving between a QML document and app://widgets, by any route (address
-    // bar, link, back, forward), swaps the process behind the tab. The new
-    // one is sent the URL once it has connected.
-    const Engine wanted = engineFor(m_history->currentUrl());
-    if (wanted != m_engine) {
-        m_engine = wanted;
+    // Moving between a QML document and an app, or between two apps, by any
+    // route (address bar, link, back, forward), swaps the process behind the
+    // tab. The new one is sent the URL once it has connected.
+    const QString wanted = AppRegistry::appFor(m_history->currentUrl());
+    if (wanted != m_app) {
+        m_app = wanted;
         if (m_process)
             restart();
         return;
@@ -400,7 +366,7 @@ void BrowserTab::reload()
 {
     // An application has no document to fetch again. Reloading it means
     // starting it again, which is also what clears its state.
-    if (m_crashed || m_engine == Engine::WidgetApp) {
+    if (m_crashed || isApp()) {
         restart();
         return;
     }

@@ -6,6 +6,7 @@
 #include <QGuiApplication>
 #include <QJsonObject>
 #include <QLocalSocket>
+#include <QSurfaceFormat>
 #include <QTimer>
 
 #ifdef Q_OS_MACOS
@@ -58,6 +59,15 @@ int main(int argc, char *argv[])
     // this is set. A tab's renderer would then become the front process, and
     // the browser window stays inactive until its title bar is clicked.
     qputenv("QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM", "1");
+
+    // Pages render through Metal. Where there is no Metal device, as in a
+    // virtual machine, Qt Quick falls back to OpenGL, and macOS then hands
+    // out an OpenGL 2.1 context unless a core profile is asked for. Qt Quick
+    // 3D needs GLSL 3.30 or later, so a page with a View3D would draw nothing.
+    QSurfaceFormat format = QSurfaceFormat::defaultFormat();
+    format.setVersion(4, 1);
+    format.setProfile(QSurfaceFormat::CoreProfile);
+    QSurfaceFormat::setDefaultFormat(format);
 #endif
     QGuiApplication app(argc, argv);
     QGuiApplication::setApplicationName(QStringLiteral("QmlRenderer"));

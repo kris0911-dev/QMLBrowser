@@ -1,13 +1,11 @@
-#include "BrowserBridge.h"
 #include "GalleryWindow.h"
+
+#include <QmlBrowserHost.h>
 
 #include <QApplication>
 #include <QCommandLineParser>
-#include <QFont>
 #include <QPalette>
 #include <QStyleFactory>
-
-#include <cstring>
 
 namespace {
 
@@ -53,15 +51,10 @@ void applyTheme()
 
 int main(int argc, char *argv[])
 {
-    // The platform has to be chosen before QApplication exists, so --channel
-    // is looked for by hand. Without it this is an ordinary desktop app.
-    bool hosted = false;
-    for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--channel") == 0)
-            hosted = true;
-    }
-    if (hosted)
-        BrowserBridge::selectOffscreenPlatform();
+    // Started by the browser, the app runs in a tab. Without --channel this
+    // is an ordinary desktop app. GPU mode, because the 3D page draws with
+    // OpenGL; QMLBROWSERHOST_GRAPHICS=software runs it the other way.
+    const bool hosted = QmlBrowserHost::prepare(argc, argv, QmlBrowserHost::Graphics::Gpu);
 
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("WidgetApp"));
@@ -72,49 +65,31 @@ int main(int argc, char *argv[])
             "A Qt Widgets application. QmlBrowser starts it for app://widgets tabs; "
             "run it without options to see it in a window of its own."));
     parser.addHelpOption();
-    QCommandLineOption channelOption(QStringLiteral("channel"),
-                                     QStringLiteral("Name of the browser process's local socket."),
-                                     QStringLiteral("name"));
-    QCommandLineOption tabOption(QStringLiteral("tab"), QStringLiteral("Tab identifier."),
-                                 QStringLiteral("id"));
     QCommandLineOption pageOption(QStringLiteral("page"),
                                   QStringLiteral("Page to open first: %1.")
                                           .arg(GalleryWindow::pageNames().join(QStringLiteral(", "))),
                                   QStringLiteral("name"));
-    parser.addOption(channelOption);
-    parser.addOption(tabOption);
     parser.addOption(pageOption);
     parser.process(app);
 
-    if (hosted) {
-        BrowserBridge::resizeScreen(1280, 800);
-        BrowserBridge::registerFontCollections();
-        // The offscreen platform has no theme, so it would otherwise fall back
-        // to a generic font. Use what a native window here would use.
-#if defined(Q_OS_MACOS)
-        QFont font(QStringLiteral(".AppleSystemUIFont"));
-        font.setPointSizeF(13);
-        QApplication::setFont(font);
-#elif defined(Q_OS_WIN)
-        QFont font(QStringLiteral("Segoe UI"));
-        font.setPointSizeF(9);
-        QApplication::setFont(font);
-#endif
-    }
     applyTheme();
 
     GalleryWindow window(hosted);
     if (parser.isSet(pageOption))
         window.showPage(parser.value(pageOption));
 
-    if (!hosted) {
+    // app://widgets/<page> opens a page, and a page picked in the app becomes
+    // a history entry. app://widgets alone is the first page, so Back to it
+    // returns there rather than staying wherever the app was.
+    QmlBrowserHost::setNavigateHandler([&window](const QString &path) {
+        const QString page = path.section(QLatin1Char('/'), 0, 0).toLower();
+        window.showPage(page.isEmpty() ? GalleryWindow::pageNames().constFirst() : page);
+    });
+    QObject::connect(&window, &GalleryWindow::pageChanged, &QmlBrowserHost::setPath);
+
+    if (!QmlBrowserHost::attach(&window)) {
         window.resize(1180, 780);
         window.show();
-        return app.exec();
     }
-
-    BrowserBridge bridge(&window);
-    if (!bridge.connectToBrowser(parser.value(channelOption), parser.value(tabOption).toInt()))
-        return 1;
     return app.exec();
 }

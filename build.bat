@@ -1,6 +1,6 @@
 @echo off
-REM Builds every project (QmlServer, QmlBrowser, QmlRenderer, WidgetApp) from a
-REM plain command prompt. Opening QmlBrowser.sln in
+REM Builds every project (QmlServer, QmlBrowser, QmlRenderer, QmlBrowserHost,
+REM WidgetApp) from a plain command prompt. Opening QmlBrowser.sln in
 REM Visual Studio and pressing Ctrl+Shift+B does exactly the same thing.
 REM
 REM Usage: build.bat [Debug|Release]

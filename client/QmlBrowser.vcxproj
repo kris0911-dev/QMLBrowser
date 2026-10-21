@@ -51,6 +51,7 @@
 
   <ItemGroup>
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="AppRegistry.cpp" />
     <ClCompile Include="BrowserHistory.cpp" />
     <ClCompile Include="BrowserTab.cpp" />
     <ClCompile Include="RendererShutdown.cpp" />

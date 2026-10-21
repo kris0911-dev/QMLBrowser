@@ -17,9 +17,9 @@ set(CMAKE_XCODE_GENERATE_SCHEME ON)
 # macOS 12.6 stops at Xcode 14.2, so that build stays on Qt 6.7.
 # Windows keeps the Qt 6.10 kit in qt.props.
 if(APPLE)
-    find_package(Qt6 6.7...<6.8 REQUIRED COMPONENTS Core Network Gui Qml Quick Widgets)
+    find_package(Qt6 6.7...<6.8 REQUIRED COMPONENTS Core Network Gui Qml Quick Widgets OpenGL OpenGLWidgets)
 else()
-    find_package(Qt6 6.10 REQUIRED COMPONENTS Core Network Gui Qml Quick Widgets)
+    find_package(Qt6 6.10 REQUIRED COMPONENTS Core Network Gui Qml Quick Widgets OpenGL OpenGLWidgets)
 endif()
 # The widget app uses these when the kit has them. Without Qt SVG the vector
 # page skips its SVG item; without Qt Multimedia the video page plays only
@@ -61,6 +61,8 @@ set_target_properties(QmlServer PROPERTIES
 
 qt_add_executable(QmlBrowser
     client/main.cpp
+    client/AppRegistry.cpp
+    client/AppRegistry.h
     client/BrowserHistory.cpp
     client/BrowserHistory.h
     client/BrowserTab.cpp
@@ -90,12 +92,32 @@ qt_add_executable(QmlRenderer
 )
 target_link_libraries(QmlRenderer PRIVATE qmlbrowser_ipc Qt6::Gui Qt6::GuiPrivate Qt6::Qml Qt6::Quick)
 
-# A Qt Widgets application that runs inside an app://widgets tab. It speaks
-# the renderer protocol, so the browser hosts it like any other tab process.
+# Puts a Qt Widgets application in an app://<name> tab. An application links
+# this and calls QmlBrowserHost::prepare() and attach() from main(). Only
+# include/ is public; the bridge uses Qt's private QPA headers internally.
+qt_add_library(QmlBrowserHost STATIC
+    apphost/include/QmlBrowserHost.h
+    apphost/src/BrowserBridge.cpp
+    apphost/src/BrowserBridge.h
+    apphost/src/InputInjector.cpp
+    apphost/src/InputInjector.h
+    apphost/src/NativePlatform.cpp
+    apphost/src/NativePlatform.h
+    apphost/src/OffscreenPlatform.cpp
+    apphost/src/OffscreenPlatform.h
+    apphost/src/QmlBrowserHost.cpp
+    apphost/src/WindowCompositor.cpp
+    apphost/src/WindowCompositor.h
+)
+target_include_directories(QmlBrowserHost PUBLIC "${CMAKE_SOURCE_DIR}/apphost/include")
+target_link_libraries(QmlBrowserHost
+    PUBLIC Qt6::Widgets
+    PRIVATE qmlbrowser_ipc Qt6::Gui Qt6::GuiPrivate)
+
+# A Qt Widgets application that runs inside an app://widgets tab, through
+# QmlBrowserHost. It is also the library's example application.
 qt_add_executable(WidgetApp
     widgetapp/main.cpp
-    widgetapp/BrowserBridge.cpp
-    widgetapp/BrowserBridge.h
     widgetapp/ControlsPage.cpp
     widgetapp/ControlsPage.h
     widgetapp/GalleryWindow.cpp
@@ -104,12 +126,14 @@ qt_add_executable(WidgetApp
     widgetapp/PaintPage.h
     widgetapp/PicturePage.cpp
     widgetapp/PicturePage.h
+    widgetapp/ScenePage.cpp
+    widgetapp/ScenePage.h
     widgetapp/VectorPage.cpp
     widgetapp/VectorPage.h
     widgetapp/VideoPage.cpp
     widgetapp/VideoPage.h
 )
-target_link_libraries(WidgetApp PRIVATE qmlbrowser_ipc Qt6::Gui Qt6::GuiPrivate Qt6::Widgets)
+target_link_libraries(WidgetApp PRIVATE QmlBrowserHost Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets)
 if(TARGET Qt6::Svg)
     target_link_libraries(WidgetApp PRIVATE Qt6::Svg)
     target_compile_definitions(WidgetApp PRIVATE WIDGETAPP_HAVE_SVG)

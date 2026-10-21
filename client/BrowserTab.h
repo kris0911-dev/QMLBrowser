@@ -21,9 +21,10 @@ QT_END_NAMESPACE
 // memory; this object keeps the latest one so the browser window can draw it,
 // and forwards input because the page itself cannot be clicked.
 //
-// app://widgets is the exception: that address is a Qt Widgets application,
-// WidgetApp.exe, which speaks the same protocol. Navigating between a QML
-// document and the app swaps the process behind the tab.
+// An app:// address is the exception: app://<name> is a Qt Widgets
+// application listed in AppRegistry (app://widgets is WidgetApp.exe), which
+// speaks the same protocol through QmlBrowserHost. Navigating between a QML
+// document and an app, or between two apps, swaps the process behind the tab.
 class BrowserTab : public QObject
 {
     Q_OBJECT
@@ -65,7 +66,7 @@ public:
     bool canGoBack() const { return m_history->canGoBack(); }
     bool canGoForward() const { return m_history->canGoForward(); }
     // True while the tab hosts a native application rather than a document.
-    bool isApp() const { return m_engine == Engine::WidgetApp; }
+    bool isApp() const { return !m_app.isEmpty(); }
 
     BrowserHistory *history() const { return m_history; }
     bool isAttached() const { return m_channel != nullptr; }
@@ -112,10 +113,6 @@ signals:
     void fullScreenRequested(bool on);
 
 private:
-    // Which program draws the tab.
-    enum class Engine { QmlRenderer, WidgetApp };
-    static Engine engineFor(const QUrl &url);
-
     void startProcess();
     // Hangs up on the current renderer and lets it exit in the background.
     void releaseRenderer();
@@ -130,7 +127,9 @@ private:
 
     int m_id = 0;
     QString m_channelName;
-    Engine m_engine = Engine::QmlRenderer;
+    // The AppRegistry name of the application behind the tab, or empty
+    // while a QmlRenderer draws it.
+    QString m_app;
 
     QProcess *m_process = nullptr;
     QPointer<IpcChannel> m_channel;
