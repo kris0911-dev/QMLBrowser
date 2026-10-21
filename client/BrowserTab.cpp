@@ -20,7 +20,13 @@ BrowserTab::BrowserTab(int id, const QString &channelName, QObject *parent)
     connect(m_history, &BrowserHistory::currentUrlChanged, this, &BrowserTab::sendCurrentUrl);
     connect(m_history, &BrowserHistory::changed, this, &BrowserTab::stateChanged);
 
-    startProcess();
+    // Started on the next turn rather than here: TabManager navigates a new
+    // tab right after creating it, and an app:// address needs WidgetApp, not
+    // a renderer that would be thrown away at once.
+    QMetaObject::invokeMethod(this, [this] {
+        if (!m_process)
+            startProcess();
+    }, Qt::QueuedConnection);
 }
 
 BrowserTab::~BrowserTab()
@@ -41,6 +47,7 @@ void BrowserTab::releaseRenderer()
 
     m_rendererPid = 0;
     m_pixels.detach();
+    clearInputMethod();
 
     QProcess *process = m_process;
     m_process = nullptr;
@@ -61,30 +68,43 @@ QString BrowserTab::title() const
 
 namespace {
 
-QString rendererExecutable()
+// QmlRenderer or WidgetApp, next to the browser executable (or, on macOS,
+// next to the browser's app bundle).
+QString helperExecutable(const QString &name)
 {
     const QDir dir(QCoreApplication::applicationDirPath());
 #if defined(Q_OS_WIN)
-    return dir.absoluteFilePath(QStringLiteral("QmlRenderer.exe"));
+    return dir.absoluteFilePath(name + QStringLiteral(".exe"));
 #elif defined(Q_OS_MACOS)
-    const QString beside = dir.absoluteFilePath(QStringLiteral("QmlRenderer"));
+    const QString beside = dir.absoluteFilePath(name);
     if (QFileInfo::exists(beside))
         return beside;
 
     QDir root(dir);
     if (root.cdUp() && root.cdUp() && root.cdUp()) {
         const QString bundled = root.absoluteFilePath(
-                QStringLiteral("QmlRenderer.app/Contents/MacOS/QmlRenderer"));
+                name + QStringLiteral(".app/Contents/MacOS/") + name);
         if (QFileInfo::exists(bundled))
             return bundled;
     }
     return beside;
 #else
-    return dir.absoluteFilePath(QStringLiteral("QmlRenderer"));
+    return dir.absoluteFilePath(name);
 #endif
 }
 
 } // namespace
+
+BrowserTab::Engine BrowserTab::engineFor(const QUrl &url)
+{
+    // Only app://widgets is an application. Any other app:// address goes to
+    // the renderer, which shows its error page for an unknown scheme.
+    if (url.scheme() == QLatin1String("app")
+            && url.host().compare(QLatin1String("widgets"), Qt::CaseInsensitive) == 0) {
+        return Engine::WidgetApp;
+    }
+    return Engine::QmlRenderer;
+}
 
 void BrowserTab::startProcess()
 {
@@ -92,7 +112,9 @@ void BrowserTab::startProcess()
     m_rendererPid = 0;
     m_viewportValid = false;
 
-    const QString program = rendererExecutable();
+    const QString program = helperExecutable(m_engine == Engine::WidgetApp
+                                                     ? QStringLiteral("WidgetApp")
+                                                     : QStringLiteral("QmlRenderer"));
 
     m_process = new QProcess(this);
     RendererShutdown::watch(m_process);
@@ -115,12 +137,15 @@ void BrowserTab::onProcessFinished(int exitCode, int status)
     m_channel = nullptr;
     m_rendererPid = 0;
     m_pixels.detach();
+    clearInputMethod();
     m_crashed = true;
     m_status = Error;
     m_progress = 1.0;
+    const QString what = m_engine == Engine::WidgetApp ? QStringLiteral("application")
+                                                        : QStringLiteral("renderer");
     m_errorString = status == QProcess::CrashExit
-            ? QStringLiteral("The renderer process for this tab terminated unexpectedly.")
-            : QStringLiteral("The renderer process for this tab exited with code %1.").arg(exitCode);
+            ? QStringLiteral("The %1 process for this tab terminated unexpectedly.").arg(what)
+            : QStringLiteral("The %1 process for this tab exited with code %2.").arg(what).arg(exitCode);
 
     emit stateChanged();
 }
@@ -277,6 +302,8 @@ void BrowserTab::onMessage(const QJsonObject &message)
             return;
         m_cursorShape = shape;
         emit cursorChanged(shape);
+    } else if (type == QLatin1String("ime")) {
+        onInputMethod(message);
     } else if (type == QLatin1String("navigate")) {
         navigateTo(QUrl(message.value(QStringLiteral("url")).toString()));
     } else if (type == QLatin1String("source")) {
@@ -289,9 +316,55 @@ void BrowserTab::onMessage(const QJsonObject &message)
     }
 }
 
+void BrowserTab::onInputMethod(const QJsonObject &message)
+{
+    const QJsonObject previous = m_inputMethod;
+    m_inputMethod = message;
+
+    const auto changed = [&](const char *key) {
+        const QString name = QLatin1String(key);
+        return previous.value(name) != message.value(name);
+    };
+
+    Qt::InputMethodQueries queries;
+    if (changed("enabled") || changed("hints") || changed("readOnly"))
+        queries |= Qt::ImEnabled | Qt::ImHints | Qt::ImReadOnly;
+    if (changed("cursorRect") || changed("anchorRect") || changed("clipRect"))
+        queries |= Qt::ImCursorRectangle | Qt::ImAnchorRectangle | Qt::ImInputItemClipRectangle;
+    if (changed("text") || changed("selection") || changed("cursor") || changed("anchor")
+            || changed("absolute") || changed("before") || changed("after")) {
+        queries |= Qt::ImSurroundingText | Qt::ImCurrentSelection | Qt::ImCursorPosition
+                | Qt::ImAnchorPosition | Qt::ImAbsolutePosition | Qt::ImTextBeforeCursor
+                | Qt::ImTextAfterCursor;
+    }
+    const bool focusMoved = changed("serial");
+
+    if (queries || focusMoved)
+        emit inputMethodChanged(int(queries), focusMoved);
+}
+
+void BrowserTab::clearInputMethod()
+{
+    if (m_inputMethod.isEmpty())
+        return;
+    m_inputMethod = QJsonObject();
+    emit inputMethodChanged(int(Qt::ImQueryAll), true);
+}
+
 void BrowserTab::sendCurrentUrl()
 {
     emit stateChanged();
+
+    // Moving between a QML document and app://widgets, by any route (address
+    // bar, link, back, forward), swaps the process behind the tab. The new
+    // one is sent the URL once it has connected.
+    const Engine wanted = engineFor(m_history->currentUrl());
+    if (wanted != m_engine) {
+        m_engine = wanted;
+        if (m_process)
+            restart();
+        return;
+    }
 
     if (!m_channel)
         return;
@@ -306,7 +379,9 @@ void BrowserTab::navigateTo(const QUrl &url)
 {
     if (m_crashed) {
         m_history->navigateTo(url);
-        restart();
+        // A change of engine has already started a fresh process.
+        if (m_crashed)
+            restart();
         return;
     }
 
@@ -323,7 +398,9 @@ void BrowserTab::navigateToText(const QString &text)
 
 void BrowserTab::reload()
 {
-    if (m_crashed) {
+    // An application has no document to fetch again. Reloading it means
+    // starting it again, which is also what clears its state.
+    if (m_crashed || m_engine == Engine::WidgetApp) {
         restart();
         return;
     }
@@ -352,8 +429,14 @@ void BrowserTab::restart()
     releaseRenderer();
 
     m_status = Null;
+    m_title.clear();
+    m_httpStatus = 0;
+    m_byteCount = 0;
+    m_progress = 0;
     m_errorString.clear();
+    m_sourceText.clear();
     m_frame = QImage();
     emit frameChanged();
+    emit sourceTextChanged();
     startProcess();
 }

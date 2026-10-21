@@ -321,7 +321,7 @@ Window {
             anchors.left: parent.left
             anchors.leftMargin: 176
             anchors.right: parent.right
-            anchors.rightMargin: 180
+            anchors.rightMargin: 220
             height: 36
             radius: 10
             color: input.activeFocus ? "#1a2030" : "#171b26"
@@ -391,6 +391,15 @@ Window {
             anchors.verticalCenter: parent.verticalCenter
             spacing: 4
 
+            // The Qt Widgets application runs in a tab of its own process,
+            // like a page, at app://widgets.
+            ToolButton {
+                glyph: "\u25A3"
+                tooltip: "Open the Qt Widgets app in a new tab  (app://widgets)"
+                glyphColor: window.current && window.current.isApp ? "#7ce3b0" : "#d5dcec"
+                onClicked: tabs.addTab("app://widgets")
+                onHoveredChanged: window.hint = hovered ? tooltip : ""
+            }
             ToolButton {
                 glyph: "\u2191"
                 tooltip: "Hide the bars  (Ctrl+Shift+F)"

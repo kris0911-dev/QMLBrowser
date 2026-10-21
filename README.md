@@ -1,6 +1,6 @@
 # QML Browser
 
-A browser whose document format is **QML** instead of HTML. Three native Qt/C++
+A browser whose document format is **QML** instead of HTML. Four native Qt/C++
 programs:
 
 | | |
@@ -8,6 +8,7 @@ programs:
 | `QmlServer.exe` | Serves `.qml` documents and their assets over HTTP from `server\wwwroot`. |
 | `QmlBrowser.exe` | The browser window: tab strip, address bar, history, status line. Renders no page content itself. |
 | `QmlRenderer.exe` | One process per tab. Fetches a document, compiles it with the Qt Quick engine and draws it. |
+| `WidgetApp.exe` | A Qt Widgets application (controls, painting, pictures, vector graphics, video) that runs in an `app://widgets` tab through the same frame and input protocol. |
 
 There is no Chromium, no `QWebEngineView`, no HTML parser and no `QtWebView`
 anywhere in the build. Rendering is the Qt Quick scene graph through Qt RHI:
@@ -17,8 +18,24 @@ Direct3D 11 on Windows, Metal on macOS.
 address bar, and the messages between the browser and a tab.
 
 Tabs are isolated the way Chrome and Edge isolate them: a page that crashes,
-hangs or aborts takes down only its own `QmlRenderer.exe`, and the browser
-window shows a recovery page in that tab while the other tabs keep running.
+hangs or aborts takes down only its own `QmlRenderer.exe` (or `WidgetApp.exe`),
+and the browser window shows a recovery page in that tab while the other tabs
+keep running.
+
+> [!IMPORTANT]
+> **An app tab hosts only the bundled `WidgetApp` today, not any Qt program.**
+> QML documents work in every tab, since that is what `QmlRenderer` draws. A
+> separate Qt application has to be linked with `widgetapp/BrowserBridge` to
+> appear in a tab, and the bridge captures Qt Widgets only. A standalone Qt
+> Quick application cannot be hosted yet.
+>
+> **Recommended next step:** turn the bridge into a Qt platform plugin, so the
+> browser can start an unmodified Qt executable with `-platform qmlbrowser`.
+> That covers Widgets applications and Qt Quick applications that use the
+> software renderer. The quicker alternative is to make the bridge a library
+> that each application links. It only works for Widgets applications whose
+> source you control. The trade-offs are in `DOCUMENTATION.md` under
+> "Hosting other Qt applications".
 
 ## Prerequisites
 
@@ -28,12 +45,21 @@ window shows a recovery page in that tab while the other tabs keep running.
 * Qt 6 for MSVC x64. Developed against **Qt 6.10.3** at `C:\Qt\6.10.3\msvc2022_64`
 * Visual Studio 2022 or later, with the **Desktop development with C++** workload
 
+The default Qt installer selection is enough. Qt SVG and Qt Multimedia are
+optional: `WidgetApp` uses them when the kit has them (an SVG item on its
+Vectors page, video files on its Video page) and builds without them otherwise.
+
 If Qt is installed somewhere else, set `QtDir` before building, or change it in
 `qt.props`:
 
 ```bat
 set QtDir=C:\Qt\6.9.0\msvc2022_64
 ```
+
+`WidgetApp` also needs Qt's private QPA headers, which sit in a folder named
+after the Qt version. `qt.props` reads the version from the folder above
+`QtDir` (`6.9.0` here). If your kit is laid out differently, set
+`QtVersion=6.9.0` as well.
 
 Nothing else is required for this build. There is no CMake, no qmake, no Qt VS
 Tools extension, and no extra libraries. `moc` and `rcc` run as MSBuild steps,
@@ -54,7 +80,9 @@ export QTDIR=$HOME/Qt/6.7.3/macos
 open build/macos-xcode/QmlBrowser.xcodeproj
 ```
 
-In Xcode choose the **QmlServer** scheme and Run it, then the **QmlBrowser** scheme and Debug. The Debug configuration is the one the scheme uses for a normal run. Breakpoints in `client/`, `renderer/`, and `server/` work in that session.
+In Xcode choose the **QmlServer** scheme and Run it, then the **QmlBrowser** scheme and Debug. The Debug configuration is the one the scheme uses for a normal run. Breakpoints in `client/` and `server/` work in that session. A tab's process (`QmlRenderer` or `WidgetApp`) is a separate process; attach to it by name (Debug › Attach to Process) to debug `renderer/` or `widgetapp/`. The **WidgetApp** scheme runs the app on its own, as a normal window.
+
+`build-macos.sh` builds all four programs. At configure time CMake prints whether it found Qt SVG and Qt Multimedia for `WidgetApp`.
 
 Qt Creator can open `CMakeLists.txt` and use the `macos-debug` preset (Ninja, `CMAKE_BUILD_TYPE=Debug`). The same `QTDIR` is required. Run `QmlServer`, then debug `QmlBrowser`.
 
@@ -81,8 +109,12 @@ build.bat            REM or: build.bat Release
 run.bat              REM starts the server, then the browser
 ```
 
-All three executables land in `bin\x64\Debug\`. Run `QmlBrowser.exe`; it starts
-`QmlRenderer.exe` itself, once per tab.
+All four executables land in `bin\x64\Debug\`. Run `QmlBrowser.exe`; it starts
+`QmlRenderer.exe` itself, once per tab, and `WidgetApp.exe` for each
+`app://widgets` tab. The build also copies Qt's `offscreen` platform plugin
+into `bin\x64\Debug\platforms\`, which `WidgetApp.exe` needs when it runs in a
+tab. `WidgetApp.exe` started by itself opens as a normal window
+(`WidgetApp.exe --page video` opens on a page).
 
 ## Using it
 
@@ -119,6 +151,17 @@ the less drastic version of the same thing. The two are independent: hiding the
 bars, going full screen and then pressing `Esc` leaves full screen but keeps
 the bars hidden, and a second `Esc` brings them back. `Esc` is only claimed
 while the chrome is actually off screen, so pages keep it the rest of the time.
+
+The ▣ toolbar button opens the Qt Widgets app in a new tab, at `app://widgets`.
+`app://widgets/paint`, `/pictures`, `/vectors` and `/video` open a page of it
+directly. Moving between a QML page and the app (link, address bar, back,
+forward) swaps the process behind the tab. Picking a page inside the app adds a
+history entry. Reload restarts the app. View source shows its widget tree.
+
+Input methods work in page text fields and in the app: composition is drawn in
+the field and the candidate window follows the caret. `/ime.qml` and
+`/ime-controls.qml` are test pages with every kind of field and a live event
+log.
 
 Any page can call `browser.crash()` to abort its own renderer, which is the
 quickest way to see the isolation for yourself.
@@ -196,7 +239,7 @@ component library. `server\wwwroot\shared\` is one.
 ## Layout
 
 ```
-qt.props                  Qt paths, warning setup, output dirs; shared by all three projects
+qt.props                  Qt path and version, warning setup, output dirs; shared by every project
 QmlBrowser.sln             Windows solution
 build.bat                  msbuild Debug or Release, x64
 CMakeLists.txt             CMake build. Apple requires Qt 6.7; other platforms require Qt 6.10
@@ -210,18 +253,29 @@ server\
   HttpServer.h/.cpp       QTcpServer; GET/HEAD, keep-alive, MIME, directory listings
   wwwroot\                the served site
     index.qml about.qml gallery.qml docs.qml
+    ime.qml ime-controls.qml   input-method test pages
     shared\               qmldir + Page/Card/NavLink components
     assets\logo.svg
 client\                   QmlBrowser.exe — the browser window
   main.cpp                QGuiApplication, type registration, start URL
   WindowFrame.h/.cpp      custom caption: tab strip replaces the Windows title bar
   TabManager.h/.cpp       QLocalServer, the tab list, viewport size
-  BrowserTab.h/.cpp       one renderer process: QProcess + IPC channel + history + frames
+  BrowserTab.h/.cpp       one tab process (renderer or app): QProcess + IPC + history + frames
   BrowserHistory.h/.cpp   back/forward stack and URL normalisation
-  TabViewport.h/.cpp      draws the active tab's frame inside the browser window
+  TabViewport.h/.cpp      draws the active tab's frame, forwards input, stands in for the IME
   ui\Browser.qml          tab strip, toolbar, address bar, crash page, source panel
   ui\TabButton.qml ui\ToolButton.qml
   resources.qrc           chrome compiled into the exe via rcc
+widgetapp\                WidgetApp.exe — the Qt Widgets app behind app://widgets
+  main.cpp                hosted (offscreen platform) or standalone start, dark Fusion theme
+  BrowserBridge.h/.cpp    paints its windows into shared memory, replays browser input and IME
+  GalleryWindow.h/.cpp    QMainWindow, menus, tool bar, page routing
+  ControlsPage.h/.cpp     buttons, menus, dialogs, text input, ranges, item views
+  PaintPage.h/.cpp        freehand canvas
+  PicturePage.h/.cpp      generated pictures with zoom, pan and rotation
+  VectorPage.h/.cpp       QGraphicsView scene, optional SVG item
+  VideoPage.h/.cpp        generated test clip, optional Qt Multimedia playback
+  WidgetApp.vcxproj       Windows project; also deploys the offscreen platform plugin
 renderer\                 QmlRenderer.exe — one instance per tab
   main.cpp                offscreen frame loop and IPC plumbing
   OffscreenPage.h/.cpp    windowless Qt Quick rasterization into shared memory
@@ -253,6 +307,12 @@ If a renderer exits for any reason, `BrowserTab` records the exit code and the
 tab shows a recovery page; **Reload tab** launches a fresh process into the same
 history.
 
+`app://widgets` swaps the tab's process for `WidgetApp`. It runs on Qt's
+offscreen platform, paints every visible top-level widget (main window, menus,
+popups, tooltips, dialogs) into the same shared-memory frame, and replays the
+browser's input through `QWindowSystemInterface`. Run it without `--channel` to
+see it as a normal window. `DOCUMENTATION.md` has the details and limits.
+
 ## How a page load works
 
 1. `PageView` issues the `GET` through `QNetworkAccessManager`.
@@ -278,6 +338,12 @@ server returns an HTML error body.
 * Remote QML is sandboxed by Qt: a served document cannot read local files on the
   machine running the client, and can only import modules the client already
   ships.
+* The app tab cannot share the clipboard with other programs: Qt's offscreen
+  platform keeps its own. Its dialogs cannot be dragged, and drag and drop stays
+  inside the app.
+* On Windows a hosted `WidgetApp` reads its fonts from `%WINDIR%\Fonts`, because
+  Qt's offscreen platform there has no system font access of its own.
+  `DOCUMENTATION.md` explains why.
 * The first build runs `windeployqt`, which takes a few seconds. It is skipped
   afterwards via a stamp file in the output directory; delete
   `bin\x64\<Config>\qtdeploy_*.stamp` to force a redeploy.

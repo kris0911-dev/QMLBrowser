@@ -7,9 +7,12 @@ EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "QmlBrowser", "client\QmlBrowser.vcxproj", "{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840002}"
 	ProjectSection(ProjectDependencies) = postProject
 		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840003} = {8F1C4A21-6D3E-4B5A-9C10-2E7A5B840003}
+		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840004} = {8F1C4A21-6D3E-4B5A-9C10-2E7A5B840004}
 	EndProjectSection
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "QmlRenderer", "renderer\QmlRenderer.vcxproj", "{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840003}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WidgetApp", "widgetapp\WidgetApp.vcxproj", "{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840004}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -29,6 +32,10 @@ Global
 		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840003}.Debug|x64.Build.0 = Debug|x64
 		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840003}.Release|x64.ActiveCfg = Release|x64
 		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840003}.Release|x64.Build.0 = Release|x64
+		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840004}.Debug|x64.ActiveCfg = Debug|x64
+		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840004}.Debug|x64.Build.0 = Debug|x64
+		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840004}.Release|x64.ActiveCfg = Release|x64
+		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840004}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

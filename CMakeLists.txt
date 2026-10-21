@@ -17,10 +17,14 @@ set(CMAKE_XCODE_GENERATE_SCHEME ON)
 # macOS 12.6 stops at Xcode 14.2, so that build stays on Qt 6.7.
 # Windows keeps the Qt 6.10 kit in qt.props.
 if(APPLE)
-    find_package(Qt6 6.7...<6.8 REQUIRED COMPONENTS Core Network Gui Qml Quick)
+    find_package(Qt6 6.7...<6.8 REQUIRED COMPONENTS Core Network Gui Qml Quick Widgets)
 else()
-    find_package(Qt6 6.10 REQUIRED COMPONENTS Core Network Gui Qml Quick)
+    find_package(Qt6 6.10 REQUIRED COMPONENTS Core Network Gui Qml Quick Widgets)
 endif()
+# The widget app uses these when the kit has them. Without Qt SVG the vector
+# page skips its SVG item; without Qt Multimedia the video page plays only
+# its generated clip.
+find_package(Qt6 QUIET OPTIONAL_COMPONENTS Svg Multimedia)
 
 if(APPLE)
     get_filename_component(QMLBROWSER_QT_PREFIX "${Qt6_DIR}/../../.." ABSOLUTE)
@@ -86,6 +90,36 @@ qt_add_executable(QmlRenderer
 )
 target_link_libraries(QmlRenderer PRIVATE qmlbrowser_ipc Qt6::Gui Qt6::GuiPrivate Qt6::Qml Qt6::Quick)
 
+# A Qt Widgets application that runs inside an app://widgets tab. It speaks
+# the renderer protocol, so the browser hosts it like any other tab process.
+qt_add_executable(WidgetApp
+    widgetapp/main.cpp
+    widgetapp/BrowserBridge.cpp
+    widgetapp/BrowserBridge.h
+    widgetapp/ControlsPage.cpp
+    widgetapp/ControlsPage.h
+    widgetapp/GalleryWindow.cpp
+    widgetapp/GalleryWindow.h
+    widgetapp/PaintPage.cpp
+    widgetapp/PaintPage.h
+    widgetapp/PicturePage.cpp
+    widgetapp/PicturePage.h
+    widgetapp/VectorPage.cpp
+    widgetapp/VectorPage.h
+    widgetapp/VideoPage.cpp
+    widgetapp/VideoPage.h
+)
+target_link_libraries(WidgetApp PRIVATE qmlbrowser_ipc Qt6::Gui Qt6::GuiPrivate Qt6::Widgets)
+if(TARGET Qt6::Svg)
+    target_link_libraries(WidgetApp PRIVATE Qt6::Svg)
+    target_compile_definitions(WidgetApp PRIVATE WIDGETAPP_HAVE_SVG)
+endif()
+if(TARGET Qt6::Multimedia)
+    target_link_libraries(WidgetApp PRIVATE Qt6::Multimedia)
+    target_compile_definitions(WidgetApp PRIVATE WIDGETAPP_HAVE_MULTIMEDIA)
+endif()
+message(STATUS "WidgetApp: Qt SVG ${Qt6Svg_FOUND}, Qt Multimedia ${Qt6Multimedia_FOUND}")
+
 if(APPLE)
     # Local debugging does not need an Apple Developer team.
     set(_qmlbrowser_nosign
@@ -94,7 +128,7 @@ if(APPLE)
     )
     # qt_add_executable does not create a bundle. The qt.conf copy and the
     # renderer lookup both require QmlBrowser.app and QmlRenderer.app.
-    set_target_properties(QmlBrowser QmlRenderer PROPERTIES
+    set_target_properties(QmlBrowser QmlRenderer WidgetApp PROPERTIES
         MACOSX_BUNDLE TRUE
         ${_qmlbrowser_nosign}
         MACOSX_DEPLOYMENT_TARGET "${CMAKE_OSX_DEPLOYMENT_TARGET}"
@@ -126,4 +160,8 @@ if(APPLE)
 
     qmlbrowser_bundle_qt_conf(QmlBrowser)
     qmlbrowser_bundle_qt_conf(QmlRenderer)
+    # Hosted, the app uses the offscreen platform and never touches the Dock.
+    # Run on its own it is a normal application, so it keeps the default
+    # Info.plist rather than the renderer's LSUIElement one.
+    qmlbrowser_bundle_qt_conf(WidgetApp)
 endif()

@@ -4,13 +4,36 @@
 #include "TabManager.h"
 
 #include <QCursor>
+#include <QGuiApplication>
 #include <QHoverEvent>
+#include <QInputMethod>
+#include <QInputMethodEvent>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QKeyEvent>
+#include <QTextCharFormat>
 #include <QMouseEvent>
 #include <QQuickWindow>
 #include <QSGSimpleTextureNode>
 #include <QWheelEvent>
+
+namespace {
+
+QRectF rectFrom(const QJsonValue &value)
+{
+    const QJsonArray rect = value.toArray();
+    if (rect.size() != 4)
+        return {};
+    return QRectF(rect.at(0).toDouble(), rect.at(1).toDouble(), rect.at(2).toDouble(),
+                  rect.at(3).toDouble());
+}
+
+QString colorName(const QBrush &brush)
+{
+    return brush.style() == Qt::NoBrush ? QString() : brush.color().name(QColor::HexArgb);
+}
+
+} // namespace
 
 TabViewport::TabViewport(QQuickItem *parent)
     : QQuickItem(parent)
@@ -75,10 +98,13 @@ void TabViewport::bindCurrentTab()
         disconnect(m_tab, nullptr, this, nullptr);
 
     m_tab = m_manager ? m_manager->currentTab() : nullptr;
+    syncInputMethod(int(Qt::ImQueryAll), true);
     if (!m_tab) {
         adoptFrame();
         return;
     }
+
+    connect(m_tab, &BrowserTab::inputMethodChanged, this, &TabViewport::syncInputMethod);
 
     connect(m_tab, &BrowserTab::frameChanged, this, &TabViewport::adoptFrame);
     connect(m_tab, &BrowserTab::cursorChanged, this, [this](int shape) {
@@ -166,6 +192,110 @@ void TabViewport::postKey(const QString &action, QKeyEvent *event)
     message.insert(QStringLiteral("nativeMods"), static_cast<double>(event->nativeModifiers()));
     tab->postInput(message);
     event->accept();
+}
+
+void TabViewport::syncInputMethod(int queries, bool focusMoved)
+{
+    // Only claim input-method support while the page's focused item takes
+    // text. macOS sends key presses through the input method only when the
+    // focus object answers Qt::ImEnabled, and password or button focus must
+    // not open a candidate window.
+    const QJsonObject state = m_tab ? m_tab->inputMethodState() : QJsonObject();
+    setFlag(ItemAcceptsInputMethod, state.value(QStringLiteral("enabled")).toBool());
+
+    if (!hasActiveFocus())
+        return;
+
+    if (focusMoved) {
+        // The renderer has already committed the old field's preedit.
+        m_discardInputMethod = true;
+        QGuiApplication::inputMethod()->reset();
+        m_discardInputMethod = false;
+    }
+    QGuiApplication::inputMethod()->update(Qt::InputMethodQueries(queries));
+}
+
+void TabViewport::inputMethodEvent(QInputMethodEvent *event)
+{
+    BrowserTab *tab = currentTab();
+    if (!tab || m_discardInputMethod) {
+        event->accept();
+        return;
+    }
+
+    QJsonArray attributes;
+    for (const QInputMethodEvent::Attribute &attribute : event->attributes()) {
+        QJsonObject item;
+        item.insert(QStringLiteral("type"), int(attribute.type));
+        item.insert(QStringLiteral("start"), attribute.start);
+        item.insert(QStringLiteral("length"), attribute.length);
+        if (attribute.type == QInputMethodEvent::TextFormat) {
+            const QTextCharFormat format =
+                    qvariant_cast<QTextFormat>(attribute.value).toCharFormat();
+            item.insert(QStringLiteral("underline"), int(format.underlineStyle()));
+            if (format.underlineColor().isValid())
+                item.insert(QStringLiteral("underlineColor"),
+                            format.underlineColor().name(QColor::HexArgb));
+            item.insert(QStringLiteral("foreground"), colorName(format.foreground()));
+            item.insert(QStringLiteral("background"), colorName(format.background()));
+        } else if (attribute.type != QInputMethodEvent::Cursor
+                   && attribute.type != QInputMethodEvent::Selection) {
+            continue;
+        }
+        attributes.append(item);
+    }
+
+    QJsonObject message;
+    message.insert(QStringLiteral("kind"), QStringLiteral("ime"));
+    message.insert(QStringLiteral("preedit"), event->preeditString());
+    message.insert(QStringLiteral("commit"), event->commitString());
+    message.insert(QStringLiteral("replaceStart"), event->replacementStart());
+    message.insert(QStringLiteral("replaceLength"), event->replacementLength());
+    message.insert(QStringLiteral("attributes"), attributes);
+    tab->postInput(message);
+    event->accept();
+}
+
+QVariant TabViewport::inputMethodQuery(Qt::InputMethodQuery query) const
+{
+    // Answered from the renderer's last report: the platform asks
+    // synchronously, and the page lives in another process. Rectangles are in
+    // the page's scene coordinates, which are this item's coordinates.
+    const QJsonObject state = m_tab ? m_tab->inputMethodState() : QJsonObject();
+    const auto value = [&state](const char *key) { return state.value(QLatin1String(key)); };
+
+    switch (query) {
+    case Qt::ImEnabled:
+        return value("enabled").toBool();
+    case Qt::ImHints:
+        return value("hints").toInt();
+    case Qt::ImReadOnly:
+        return value("readOnly").toBool();
+    case Qt::ImCursorRectangle:
+        return rectFrom(value("cursorRect"));
+    case Qt::ImAnchorRectangle:
+        return rectFrom(value("anchorRect"));
+    case Qt::ImInputItemClipRectangle: {
+        const QRectF clip = rectFrom(value("clipRect"));
+        return clip.isValid() ? QVariant(clip) : QQuickItem::inputMethodQuery(query);
+    }
+    case Qt::ImSurroundingText:
+        return value("text").toString();
+    case Qt::ImCurrentSelection:
+        return value("selection").toString();
+    case Qt::ImCursorPosition:
+        return value("cursor").toInt();
+    case Qt::ImAnchorPosition:
+        return value("anchor").toInt();
+    case Qt::ImAbsolutePosition:
+        return value("absolute").toInt();
+    case Qt::ImTextBeforeCursor:
+        return value("before").toString();
+    case Qt::ImTextAfterCursor:
+        return value("after").toString();
+    default:
+        return QQuickItem::inputMethodQuery(query);
+    }
 }
 
 void TabViewport::mousePressEvent(QMouseEvent *event)

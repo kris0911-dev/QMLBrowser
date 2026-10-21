@@ -40,7 +40,7 @@
 
   <ItemDefinitionGroup>
     <ClCompile>
-      <AdditionalIncludeDirectories>$(RepoRoot)shared;$(QtInclude)\QtCore;$(QtInclude)\QtGui;$(QtInclude)\QtGui\6.10.3\QtGui;$(QtInclude)\QtNetwork;$(QtInclude)\QtQml;$(QtInclude)\QtQuick;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(RepoRoot)shared;$(QtInclude)\QtCore;$(QtInclude)\QtGui;$(QtGuiPrivateInclude);$(QtInclude)\QtNetwork;$(QtInclude)\QtQml;$(QtInclude)\QtQuick;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <!-- Qt6EntryPoint supplies the WinMain that forwards to main(). -->

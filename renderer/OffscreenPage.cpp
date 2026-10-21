@@ -3,6 +3,9 @@
 #include <QColor>
 #include <QCoreApplication>
 #include <QHoverEvent>
+#include <QInputMethodEvent>
+#include <QInputMethodQueryEvent>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -12,6 +15,7 @@
 #include <QQuickRenderControl>
 #include <QQuickRenderTarget>
 #include <QQuickWindow>
+#include <QTextCharFormat>
 #include <QTimer>
 #include <QWheelEvent>
 
@@ -44,6 +48,37 @@ Qt::MouseButtons buttonsFrom(const QJsonObject &message)
     return Qt::MouseButtons(message.value(QStringLiteral("buttons")).toInt());
 }
 
+QJsonArray rectToJson(const QRectF &rect)
+{
+    return { rect.x(), rect.y(), rect.width(), rect.height() };
+}
+
+QColor colorFrom(const QJsonObject &object, const QString &key)
+{
+    const QString name = object.value(key).toString();
+    return name.isEmpty() ? QColor() : QColor::fromString(name);
+}
+
+// The browser sends the preedit decoration the platform input method asked
+// for: the clause underlines and the highlighted candidate segment.
+QTextCharFormat formatFrom(const QJsonObject &attribute)
+{
+    QTextCharFormat format;
+    const int underline = attribute.value(QStringLiteral("underline")).toInt();
+    if (underline != QTextCharFormat::NoUnderline)
+        format.setUnderlineStyle(QTextCharFormat::UnderlineStyle(underline));
+    const QColor underlineColor = colorFrom(attribute, QStringLiteral("underlineColor"));
+    if (underlineColor.isValid())
+        format.setUnderlineColor(underlineColor);
+    const QColor foreground = colorFrom(attribute, QStringLiteral("foreground"));
+    if (foreground.isValid())
+        format.setForeground(foreground);
+    const QColor background = colorFrom(attribute, QStringLiteral("background"));
+    if (background.isValid())
+        format.setBackground(background);
+    return format;
+}
+
 } // namespace
 
 OffscreenPage::OffscreenPage(QObject *parent)
@@ -59,6 +94,8 @@ OffscreenPage::OffscreenPage(QObject *parent)
 
 OffscreenPage::~OffscreenPage()
 {
+    if (m_window)
+        disconnect(m_window, nullptr, this, nullptr);
     releaseTarget();
     if (m_engine)
         m_engine->setIncubationController(nullptr);
@@ -112,6 +149,8 @@ bool OffscreenPage::load()
             &OffscreenPage::scheduleRender);
     connect(m_renderControl, &QQuickRenderControl::sceneChanged, this,
             &OffscreenPage::scheduleRender);
+    connect(m_window, &QQuickWindow::activeFocusItemChanged, this,
+            &OffscreenPage::onActiveFocusItemChanged);
     return true;
 }
 
@@ -261,6 +300,9 @@ void OffscreenPage::renderFrame()
     }
 
     m_renderControl->polishItems();
+    // Scrolling moves the focused field without touching its own cursor
+    // rectangle, so the scene position is re-read once per frame.
+    publishInputMethod();
     m_renderControl->beginFrame();
     if (!m_rhi->isRecordingFrame() || !m_renderControl->commandBuffer()) {
         m_rendering = false;
@@ -374,7 +416,12 @@ void OffscreenPage::deliverInput(const QJsonObject &message)
         deliverKey(release ? QEvent::KeyRelease : QEvent::KeyPress, message);
     } else if (kind == QLatin1String("focus")) {
         deliverFocus(message.value(QStringLiteral("on")).toBool());
+    } else if (kind == QLatin1String("ime")) {
+        deliverInputMethod(message);
     }
+    // A click or key can move the text cursor; tell the browser right away
+    // rather than waiting for the next frame.
+    publishInputMethod();
 }
 
 void OffscreenPage::deliverMouse(QEvent::Type type, const QJsonObject &message)
@@ -448,4 +495,101 @@ void OffscreenPage::deliverFocus(bool on)
     }
     QEvent deactivate(QEvent::WindowDeactivate);
     QCoreApplication::sendEvent(m_window, &deactivate);
+}
+
+void OffscreenPage::deliverInputMethod(const QJsonObject &message)
+{
+    if (!m_window)
+        return;
+    QQuickItem *item = m_window->activeFocusItem();
+    if (!item)
+        return;
+
+    QList<QInputMethodEvent::Attribute> attributes;
+    const QJsonArray list = message.value(QStringLiteral("attributes")).toArray();
+    for (const QJsonValue &value : list) {
+        const QJsonObject attribute = value.toObject();
+        const auto type = QInputMethodEvent::AttributeType(
+                attribute.value(QStringLiteral("type")).toInt());
+        const int start = attribute.value(QStringLiteral("start")).toInt();
+        const int length = attribute.value(QStringLiteral("length")).toInt();
+        if (type == QInputMethodEvent::TextFormat)
+            attributes.append({ type, start, length, formatFrom(attribute) });
+        else if (type == QInputMethodEvent::Cursor || type == QInputMethodEvent::Selection)
+            attributes.append({ type, start, length });
+    }
+
+    const QString preedit = message.value(QStringLiteral("preedit")).toString();
+    QInputMethodEvent event(preedit, attributes);
+    event.setCommitString(message.value(QStringLiteral("commit")).toString(),
+                          message.value(QStringLiteral("replaceStart")).toInt(),
+                          message.value(QStringLiteral("replaceLength")).toInt());
+    QCoreApplication::sendEvent(item, &event);
+
+    m_composingItem = preedit.isEmpty() ? nullptr : item;
+    m_preedit = preedit;
+}
+
+void OffscreenPage::onActiveFocusItemChanged()
+{
+    // Qt Quick asks the platform input method to commit when focus moves, but
+    // the composition lives in the browser process, so the field that lost
+    // focus would keep a dangling preedit. Commit it here instead; the browser
+    // discards its own copy when it sees the new focus serial.
+    if (m_composingItem && !m_preedit.isEmpty() && m_composingItem != m_window->activeFocusItem()) {
+        QInputMethodEvent commit;
+        commit.setCommitString(m_preedit);
+        QCoreApplication::sendEvent(m_composingItem, &commit);
+    }
+    m_composingItem = nullptr;
+    m_preedit.clear();
+
+    ++m_focusSerial;
+    publishInputMethod();
+}
+
+void OffscreenPage::publishInputMethod()
+{
+    if (!m_window)
+        return;
+
+    QJsonObject state;
+    state.insert(QStringLiteral("serial"), static_cast<double>(m_focusSerial));
+
+    QQuickItem *item = m_window->activeFocusItem();
+    QInputMethodQueryEvent query(Qt::ImEnabled | Qt::ImHints | Qt::ImReadOnly
+                                 | Qt::ImCursorRectangle | Qt::ImAnchorRectangle
+                                 | Qt::ImInputItemClipRectangle | Qt::ImSurroundingText
+                                 | Qt::ImCurrentSelection | Qt::ImCursorPosition
+                                 | Qt::ImAnchorPosition | Qt::ImAbsolutePosition
+                                 | Qt::ImTextBeforeCursor | Qt::ImTextAfterCursor);
+    if (item)
+        QCoreApplication::sendEvent(item, &query);
+
+    const bool enabled = item && query.value(Qt::ImEnabled).toBool();
+    state.insert(QStringLiteral("enabled"), enabled);
+    if (enabled) {
+        // Item coordinates to scene coordinates. The scene is exactly the
+        // browser's viewport item, so the browser can use these unchanged.
+        const auto sceneRect = [item, &query](Qt::InputMethodQuery q) {
+            return rectToJson(item->mapRectToScene(query.value(q).toRectF()));
+        };
+        state.insert(QStringLiteral("hints"), query.value(Qt::ImHints).toInt());
+        state.insert(QStringLiteral("readOnly"), query.value(Qt::ImReadOnly).toBool());
+        state.insert(QStringLiteral("cursorRect"), sceneRect(Qt::ImCursorRectangle));
+        state.insert(QStringLiteral("anchorRect"), sceneRect(Qt::ImAnchorRectangle));
+        state.insert(QStringLiteral("clipRect"), sceneRect(Qt::ImInputItemClipRectangle));
+        state.insert(QStringLiteral("text"), query.value(Qt::ImSurroundingText).toString());
+        state.insert(QStringLiteral("selection"), query.value(Qt::ImCurrentSelection).toString());
+        state.insert(QStringLiteral("cursor"), query.value(Qt::ImCursorPosition).toInt());
+        state.insert(QStringLiteral("anchor"), query.value(Qt::ImAnchorPosition).toInt());
+        state.insert(QStringLiteral("absolute"), query.value(Qt::ImAbsolutePosition).toInt());
+        state.insert(QStringLiteral("before"), query.value(Qt::ImTextBeforeCursor).toString());
+        state.insert(QStringLiteral("after"), query.value(Qt::ImTextAfterCursor).toString());
+    }
+
+    if (state == m_inputMethod)
+        return;
+    m_inputMethod = state;
+    emit inputMethodChanged(state);
 }

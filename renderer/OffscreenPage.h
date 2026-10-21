@@ -3,6 +3,7 @@
 #include <QJsonObject>
 #include <QObject>
 #include <QPointF>
+#include <QPointer>
 #include <QSize>
 
 #include "PageView.h"
@@ -51,6 +52,10 @@ signals:
     void frameReady(quint32 sequence, int width, int height, int stride, int format,
                     const QString &key);
     void cursorChanged(int shape);
+    // What the browser needs to answer the platform input method for the
+    // focused page item: whether it takes text, hints, the cursor rectangle in
+    // viewport coordinates and the text around the cursor.
+    void inputMethodChanged(const QJsonObject &state);
 
 private:
     void scheduleRender();
@@ -66,6 +71,9 @@ private:
     void deliverHover(const QJsonObject &message);
     void deliverKey(QEvent::Type type, const QJsonObject &message);
     void deliverFocus(bool on);
+    void deliverInputMethod(const QJsonObject &message);
+    void onActiveFocusItemChanged();
+    void publishInputMethod();
 
     QQuickRenderControl *m_renderControl = nullptr;
     QQuickWindow *m_window = nullptr;
@@ -99,4 +107,11 @@ private:
     qreal m_dpr = 1;
     int m_cursor = -1;
     QPointF m_lastHover;
+
+    // Incremented whenever a different page item takes focus, so the browser
+    // can drop a composition that belonged to the previous one.
+    quint32 m_focusSerial = 0;
+    QJsonObject m_inputMethod;
+    QPointer<QQuickItem> m_composingItem;
+    QString m_preedit;
 };

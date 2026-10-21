@@ -42,6 +42,8 @@ protected:
     void hoverLeaveEvent(QHoverEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     void keyReleaseEvent(QKeyEvent *event) override;
+    void inputMethodEvent(QInputMethodEvent *event) override;
+    QVariant inputMethodQuery(Qt::InputMethodQuery query) const override;
     void focusInEvent(QFocusEvent *event) override;
     void focusOutEvent(QFocusEvent *event) override;
 
@@ -51,10 +53,14 @@ private:
     void adoptFrame();
     void postMouse(const QString &action, QMouseEvent *event);
     void postKey(const QString &action, QKeyEvent *event);
+    void syncInputMethod(int queries, bool focusMoved);
     BrowserTab *currentTab() const;
 
     QPointer<TabManager> m_manager;
     QPointer<BrowserTab> m_tab;
     QImage m_frame;
     QMutex m_mutex;
+    // Set while the platform input method is reset, so the commit it sends
+    // for the old composition does not land in the newly focused field.
+    bool m_discardInputMethod = false;
 };

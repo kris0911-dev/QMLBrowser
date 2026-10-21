@@ -13,6 +13,14 @@
     <QtDir Condition="'$(QtDir)' == ''">C:\Qt\6.10.3\msvc2022_64</QtDir>
     <QtBin>$(QtDir)\bin</QtBin>
     <QtInclude>$(QtDir)\include</QtInclude>
+    <!--
+      Private and QPA headers live under include\QtGui\<version>\QtGui. The
+      version is the parent folder of QtDir in the Qt installer layout
+      (C:\Qt\6.10.3\msvc2022_64 gives 6.10.3). Set QtVersion as well if your
+      kit is laid out differently.
+    -->
+    <QtVersion Condition="'$(QtVersion)' == ''">$([System.IO.Path]::GetFileName($([System.IO.Path]::GetDirectoryName($(QtDir.TrimEnd('\'))))))</QtVersion>
+    <QtGuiPrivateInclude>$(QtInclude)\QtGui\$(QtVersion)\QtGui</QtGuiPrivateInclude>
     <!-- Qt ships debug libraries with a trailing 'd' (Qt6Cored.lib). -->
     <QtLibSuffix Condition="'$(Configuration)' == 'Debug'">d</QtLibSuffix>
     <QtLibSuffix Condition="'$(Configuration)' != 'Debug'"></QtLibSuffix>

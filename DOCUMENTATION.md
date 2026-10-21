@@ -1,20 +1,21 @@
 # QML Browser
 
-A browser whose documents are QML, not HTML. The window, the tabs, and the pages are three separate programs. There is no Chromium, no `QWebEngineView`, and no HTML parser. A page is compiled by the Qt Quick engine and drawn by the Qt Quick scene graph.
+A browser whose documents are QML, not HTML. The server, the window, and each tab are separate programs. There is no Chromium, no `QWebEngineView`, and no HTML parser. A page is compiled by the Qt Quick engine and drawn by the Qt Quick scene graph.
 
 This file describes how the project is built, how a page is loaded, and what a document is allowed to do. `README.md` is the short version, including the Windows and macOS prerequisites.
 
-The shipped build is Windows, Visual Studio, Qt 6.10.3. The HTTP servers and the QML documents are portable. The window frame is Windows-only. Page drawing is the same on every platform: the renderer has no window, and the browser composites its frames.
+The shipped build is Windows, Visual Studio, Qt 6.10.3. macOS builds with CMake and Xcode against Qt 6.7. The HTTP servers and the QML documents are portable. The window frame is Windows-only. Page drawing is the same on every platform: a tab's process has no window, and the browser composites its frames.
 
-## The three programs
+## The programs
 
 | Program | Project | What it does |
 |---|---|---|
 | `QmlServer.exe` | `server\` | Serves files from a document root over HTTP/1.1. |
 | `QmlBrowser.exe` | `client\` | The window: tab strip, address bar, history, status line. It does not draw page content. |
-| `QmlRenderer.exe` | `renderer\` | One process per tab. Downloads a document, compiles it, and draws it. |
+| `QmlRenderer.exe` | `renderer\` | One process per QML tab. Downloads a document, compiles it, and draws it. |
+| `WidgetApp.exe` | `widgetapp\` | One process per `app://widgets` tab. A Qt Widgets application that draws into the tab instead of a window of its own. |
 
-`QmlBrowser.exe` starts `QmlRenderer.exe` itself. You start the server and the browser.
+`QmlBrowser.exe` starts `QmlRenderer.exe` and `WidgetApp.exe` itself, picking one from the tab's URL. You start the server and the browser. `WidgetApp.exe` speaks the renderer's protocol. See [App tabs](#app-tabs-appwidgets). **Other Qt applications cannot be hosted yet.** See [Hosting other Qt applications](#hosting-other-qt-applications) for the recommended way to add that.
 
 A Node.js server in `nodejs\` speaks the same HTTP as `QmlServer.exe` and serves the same files. It is a second implementation of the server, not a replacement. See [The Node server](#the-node-server).
 
@@ -29,9 +30,13 @@ QmlBrowser.exe                         QmlServer.exe  or  node server.js
   QmlRenderer.exe  ---- HTTP GET --------------+
     one process per tab, no window
     rasterizes into shared memory
+
+  WidgetApp.exe          (app://widgets tabs, same socket protocol)
+    Qt Widgets on the offscreen platform, no window
+    paints its windows into shared memory
 ```
 
-State (URL, title, HTTP status, shortcuts) travels on the local socket. Frames travel in shared memory: the renderer writes a bitmap and sends `frame`, and the browser draws it inside its own window. `viewport` carries the page size. There is no second native window to move.
+State (URL, title, HTTP status, shortcuts, input-method state) travels on the local socket. Frames travel in shared memory: the renderer writes a bitmap and sends `frame`, and the browser draws it inside its own window. `viewport` carries the page size. There is no second native window to move.
 
 ## Requirements
 
@@ -47,7 +52,23 @@ Point the build at a different Qt by setting `QtDir` before Visual Studio or `bu
 set QtDir=C:\Qt\6.9.0\msvc2022_64
 ```
 
-There is no CMake and no qmake step. `moc` and `rcc` are MSBuild custom build steps. After the link, `windeployqt` copies the Qt DLLs next to the executables. `build.bat` and `QmlBrowser.sln` are this configuration.
+The kit needs the Qt Base modules (Core, Gui, Network, Widgets) and Qt Declarative (Qml, Quick); the default installer selection has them. Two add-on modules are used when present and skipped otherwise. `WidgetApp.vcxproj` checks for their `.lib` files:
+
+| Module | Without it |
+|---|---|
+| Qt SVG | The app's Vectors page shows a note in place of its SVG item. |
+| Qt Multimedia | The app's Video page plays only its generated clip, and File › Open video is disabled. |
+
+`WidgetApp` includes Qt's QPA headers (`qpa/qwindowsysteminterface.h`), which live under `include\QtGui\<version>\QtGui`. `qt.props` derives `<version>` from the folder above `QtDir`, so `C:\Qt\6.10.3\msvc2022_64` gives `6.10.3`. For a kit laid out differently, also set `QtVersion`:
+
+```bat
+set QtDir=D:\sdk\qt-msvc
+set QtVersion=6.10.3
+```
+
+The build stops with a message naming the folder if those headers are not where `qt.props` expects them.
+
+There is no CMake and no qmake step. `moc` and `rcc` are MSBuild custom build steps. After the link, `windeployqt` copies the Qt DLLs next to the executables. `WidgetApp.vcxproj` also copies `plugins\platforms\qoffscreen.dll` (`qoffscreend.dll` in Debug) into `bin\x64\<Config>\platforms\`, because the app runs on that platform in a tab and `windeployqt` only deploys `qwindows.dll`. `build.bat` and `QmlBrowser.sln` are this configuration; building `QmlBrowser` builds `QmlRenderer` and `WidgetApp` first.
 
 ### macOS
 
@@ -59,7 +80,9 @@ There is no CMake and no qmake step. `moc` and `rcc` are MSBuild custom build st
 
 Open `build/macos-xcode/QmlBrowser.xcodeproj`. Run the QmlServer scheme, then debug the QmlBrowser scheme. Qt Creator uses the `macos-debug` preset the same way: Debug, `CMAKE_PREFIX_PATH` from `QTDIR`.
 
-On macOS the page is not a window. The renderer is an agent (`LSUIElement` in `renderer/Info.plist.in`) and sets the accessory activation policy, so a tab does not get a Dock icon. The custom caption stays Windows-only.
+On macOS the page is not a window. The renderer is an agent (`LSUIElement` in `renderer/Info.plist.in`) and sets the accessory activation policy, so a tab does not get a Dock icon. `WidgetApp.app` keeps an ordinary `Info.plist`, so it has a Dock icon when you start it on its own; hosted, it runs on the offscreen platform and never contacts the Dock. The custom caption stays Windows-only.
+
+`build-macos.sh` builds `QmlServer`, `QmlBrowser`, `QmlRenderer` and `WidgetApp`. CMake reports at configure time whether it found Qt SVG and Qt Multimedia for the app (`WidgetApp: Qt SVG 1, Qt Multimedia 0`). The Qt 6.7.3 kit installed here has Qt SVG; Qt Multimedia is a separate component in the Qt maintenance tool.
 
 The Node server runs there with Node.js 18 or newer and no packages:
 
@@ -86,7 +109,7 @@ run.bat                REM starts QmlServer.exe, then QmlBrowser.exe
 run.bat Release
 ```
 
-Opening `QmlBrowser.sln` and building does the same thing as `build.bat`. Output goes to `bin\x64\Debug\` or `bin\x64\Release\`.
+Opening `QmlBrowser.sln` and building does the same thing as `build.bat`. Output goes to `bin\x64\Debug\` or `bin\x64\Release\`: `QmlServer.exe`, `QmlBrowser.exe`, `QmlRenderer.exe`, `WidgetApp.exe`, the Qt DLLs, and `platforms\` with `qwindows` and `qoffscreen`.
 
 `run.bat` starts the server in its own console, waits about a second, then opens the browser on `http://127.0.0.1:8080/index.qml`.
 
@@ -99,7 +122,14 @@ QmlBrowser.exe
 QmlBrowser.exe http://127.0.0.1:9000/about.qml
 ```
 
-The default start URL is `http://127.0.0.1:8080/index.qml`.
+The default start URL is `http://127.0.0.1:8080/index.qml`. `QmlBrowser.exe app://widgets` starts on the widget app instead, and does not need the server.
+
+`WidgetApp.exe` also runs on its own, as a normal window on the native platform, which is useful for comparing it with the hosted copy:
+
+```bat
+WidgetApp.exe
+WidgetApp.exe --page video
+```
 
 Chrome QML (`client\ui\`, `renderer\ui\`) is compiled into the executable by `rcc`. A change there needs a rebuild of that program. A change under `server\wwwroot` does not: the server reads the file on every request, and the renderer asks the network for every load (`QNetworkRequest::AlwaysNetwork`). Press F5 after editing a page.
 
@@ -129,6 +159,10 @@ Shortcuts work while the page has keyboard focus. They are Qt Quick shortcuts on
 
 Full screen and chrome-hide are independent. Hiding the bars, then going full screen, then pressing Esc leaves full screen and leaves the bars hidden. A second Esc shows the bars. While the chrome is off the screen, the "press Esc" reminder is drawn into the page frame.
 
+The ▣ button on the right of the toolbar opens the widget app in a new tab (`app://widgets`). The home page has a card with links to it and to its pages.
+
+Typing with an input method (Pinyin, Kotoeri and the like) works in page text fields and in the widget app. The composition is drawn inside the field and the candidate window sits at the caret. See [Input methods](#input-methods).
+
 A page can call `browser.crash()` to abort its own renderer. That tab shows a recovery page. Reload starts a new `QmlRenderer.exe` on the same history. Other tabs are unaffected.
 
 ### Address bar
@@ -141,6 +175,7 @@ What you type is resolved by `BrowserHistory::resolve`.
 | `127.0.0.1`, `localhost`, `[::1]` | `http://` plus that host. If the open page is the same host and has a port, that port is kept, so `127.0.0.1` on port 8080 opens `http://127.0.0.1:8080/` |
 | `127.0.0.1:9000`, `localhost:9000`, `example.com:8080` | `http://` plus host, port, and any path |
 | `http://...`, `https://...`, `file://...`, `qrc:...` | Used as written. An empty HTTP or HTTPS path becomes `/` |
+| `app://widgets`, `app://widgets/video` | The Qt Widgets app, optionally on one of its pages: `controls`, `paint`, `pictures`, `vectors`, `video` |
 | empty | Ignored |
 | the URL already open | Reload, no new history entry |
 
@@ -194,6 +229,8 @@ Rectangle {
 
 Relative URLs, images, and `import "shared"` resolve against the document URL passed to `QQmlComponent::setData`. A folder with a `qmldir` is a remote module. `server\wwwroot\shared\` (`Page`, `Card`, `NavLink`) is the one shipped with the site.
 
+Text fields need nothing special for input methods. A field reports its state through the normal `inputMethodQuery` path, and `inputMethodHints` are honoured: `Qt.ImhHiddenText`, `Qt.ImhDigitsOnly` and `Qt.ImhFormattedNumbersOnly` keep the IME off, as they would in a local application. `echoMode: TextInput.Password` does the same.
+
 A served document cannot read local files on the machine running the browser. It can import only modules the client already has: Qt Quick modules linked into `QmlRenderer.exe`, and modules fetched by URL from the server.
 
 The sample site:
@@ -204,6 +241,8 @@ The sample site:
 | `/about.qml` | `server\wwwroot\about.qml` |
 | `/docs.qml` | `server\wwwroot\docs.qml` |
 | `/gallery.qml` | `server\wwwroot\gallery.qml` |
+| `/ime.qml` | `server\wwwroot\ime.qml`, input-method test bench built from `TextInput` and `TextEdit`, with a live state panel and an event log |
+| `/ime-controls.qml` | `server\wwwroot\ime-controls.qml`, the same checks with Qt Quick Controls (`TextField`, `TextArea`, editable `ComboBox` and `SpinBox`) |
 | `/shared/` | A generated directory listing. The folder has no `index.qml`. |
 | `/assets/logo.svg` | `server\wwwroot\assets\logo.svg` |
 
@@ -379,7 +418,7 @@ Browser to renderer:
 | `stop` | | Abort the current download. |
 | `chrome` | `fullScreen` bool, `chromeHidden` bool | Set the on-page notice. |
 | `viewport` | `visible` bool, `width`, `height`, `dpr` | Logical page size and device pixel ratio. A hidden tab is snapshotted when the size changes and otherwise does not draw. A repeated value is not sent again. |
-| `input` | `kind` plus event fields | A pointer, wheel, key, or focus event in viewport coordinates. |
+| `input` | `kind` plus event fields | A pointer, wheel, key, focus, or input-method event in viewport coordinates. See the table below. |
 | `frameAck` | `seq` number | The browser has copied that frame. The renderer may reuse the slot. |
 
 Renderer to browser:
@@ -393,10 +432,102 @@ Renderer to browser:
 | `source` | `text` | The source panel. |
 | `navigate` | `url` | The page called `browser.navigate`. The browser owns history and sends a `navigate` back. |
 | `fullscreen` | `on` | The page called `browser.setFullScreen`. |
+| `ime` | `serial`, `enabled`, and when enabled `hints`, `readOnly`, `cursorRect`, `anchorRect`, `clipRect`, `text`, `selection`, `cursor`, `anchor`, `absolute`, `before`, `after` | Input-method state of the focused item. Rectangles are `[x, y, width, height]` in viewport coordinates. Sent only when something changed. `serial` changes when a different item takes focus. |
+
+`input` kinds:
+
+| kind | Fields | Notes |
+|---|---|---|
+| `mouse` | `action` (`press`, `release`, `move`, `dbl`), `x`, `y`, `button`, `buttons`, `mods` | `move` is sent while a button is down. |
+| `hover` | `action` (`move`, `leave`), `x`, `y`, `mods` | Pointer moves with no button down. |
+| `wheel` | `x`, `y`, `px`, `py`, `ax`, `ay`, `buttons`, `mods`, `phase`, `inverted` | Pixel and angle deltas. |
+| `key` | `action` (`press`, `release`), `key`, `text`, `mods`, `repeat`, `scan`, `vk`, `nativeMods` | Browser shortcuts never arrive here. |
+| `focus` | `on` | The page area gained or lost keyboard focus. |
+| `ime` | `preedit`, `commit`, `replaceStart`, `replaceLength`, `attributes` | One `QInputMethodEvent`. `attributes` holds the cursor, selection and preedit formats (`underline`, `underlineColor`, `foreground`, `background`). |
+
+`WidgetApp` answers the same messages. Its `state` always has status 2 and no HTTP fields. It sends `navigate` when the user picks a page inside the app, so the browser records a history entry; the `navigate` that comes back is ignored because the app is already there. Reloading an app tab restarts the process instead of sending `reload`, and `stop` is ignored because nothing is ever loading.
 
 `status` in `state` matches `PageView`: 0 null, 1 loading, 2 ready, 3 error. `bytes` is the character length of the source.
 
 `TabViewport` publishes the logical page size and the window's device pixel ratio on `QQuickWindow::afterAnimating`. That covers resizes, the bars showing or hiding, and DPI changes. Only the active tab's renderer is asked to keep drawing. Two shared-memory slots are in flight at once, so the renderer can prepare the next frame while the browser still holds the previous one.
+
+## Input methods
+
+The platform input method (the macOS text input system, Windows IMM/TSF) talks to the browser window, because that is the only window. The text field is in another process, so `TabViewport` stands in for it:
+
+1. The tab process reports the focused item's state as an `ime` message: whether it takes text, its hints, the caret and anchor rectangles mapped to viewport coordinates, and the surrounding text. The renderer re-reads it after every input event and every frame, so scrolling moves the candidate window with the caret. Only changes are sent.
+2. `TabViewport` sets `ItemAcceptsInputMethod` from `enabled` and answers `inputMethodQuery` from that state. macOS only routes keys through the input method when the focus object reports `ImEnabled`, so this is what turns composition on. A password field, a digits-only field or a button keeps it off.
+3. Each `QInputMethodEvent` the platform delivers (preedit, commit, replacement range, cursor and format attributes) is forwarded as `input` with kind `ime` and replayed into the focused item.
+4. When focus moves to another item while text is being composed, the tab process commits the pending preedit into the item that lost focus and bumps `serial`. On the new serial the browser resets the platform input method and drops the commit that reset produces, so the text is inserted once.
+
+The candidate window position comes from the last report, so it can trail the caret by one message while typing quickly.
+
+`/ime.qml` and `/ime-controls.qml` exercise this with every kind of field. The Controls page of the widget app has a line edit, an editable combo box, a rich-text editor and an editable table for the same purpose.
+
+## App tabs (app://widgets)
+
+`app://widgets` is a native Qt Widgets application, `WidgetApp`, hosted in a tab. It is a `QMainWindow` with a menu bar, a tool bar, a status bar and five pages: standard controls, freehand painting, raster pictures, vector graphics (`QGraphicsView`, plus an SVG item when Qt SVG is available) and video. The video page plays a generated test clip. With Qt Multimedia in the kit it can also play a file, through a `QVideoSink` rather than `QVideoWidget`, because `QVideoWidget` draws on a native surface that `QWidget::render` cannot capture.
+
+`BrowserTab` picks the program from the URL. When the current history entry moves between a QML document and `app://widgets`, whether through a link, the address bar, back or forward, the tab retires its process and starts the other one. The new process gets the URL after `hello`, as a renderer does. Reload restarts the app, since there is nothing to fetch again. Any other `app://` host goes to the renderer, which shows its error page.
+
+Hosted, the app runs on Qt's `offscreen` platform, so none of its windows reach the screen. That covers the main window and also menus, combo box lists, tooltips, the date popup, and dialogs such as `QMessageBox`, `QColorDialog` and the non-native `QFileDialog`. `BrowserBridge` keeps the visible top-level widgets in stacking order and paints each one with `QWidget::render` into the shared-memory frame, at the browser's device pixel ratio. Dialogs get a drawn title strip and shadow, and a modal one dims what is behind it. The offscreen screen is resized to the viewport, so Qt keeps popups inside the tab.
+
+`input` messages are replayed through `QWindowSystemInterface`, synchronously, into the top-level window under the pointer, or into the active popup. Qt then does its normal work: double clicks, enter and leave, hover, tooltips, popup dismissal, modal blocking and shortcuts. The `dbl` action is dropped because Qt derives the double click from two presses. Input-method events and the `ime` state work as for a QML page, with rectangles mapped to page coordinates. `cursor` reports the cursor of the widget under the pointer, or of the pressed widget during a drag.
+
+Two details matter because widgets run nested event loops (`QDialog::exec`, `QMenu::exec`):
+
+- Incoming messages are handled through a queued connection. `QLocalSocket` does not emit `readyRead` again while a `readyRead` handler is still running, so a click that opens a dialog would otherwise cut the app off from the browser until the dialog closed.
+- The implicit mouse grab ends before a release is delivered, because the release that opens a modal dialog does not return until the dialog closes.
+
+Picking a page inside the app sends `navigate` with `app://widgets/<page>`, so the browser adds a history entry the way a single-page web app routes. View source shows the app's widget tree.
+
+Limits: the offscreen platform has its own clipboard, so copy and paste between the app and other programs does not work. Drag and drop is limited to inside the app. Dialogs cannot be dragged. Content that `QWidget::render` cannot capture, such as `QOpenGLWidget`, `QQuickWidget` or `QVideoWidget`, stays blank.
+
+Run without `--channel`, `WidgetApp` is an ordinary desktop application on the native platform. `--page <name>` opens a page.
+
+On Windows the offscreen platform draws text with a FreeType font database rather than DirectWrite. That database scans `QT_QPA_FONTDIR`, or `<Qt>\lib\fonts`, which a Qt install does not have, and it skips `.ttc` collections, which is how Windows ships its Chinese and Japanese fonts. Hosted on Windows, the app therefore points `QT_QPA_FONTDIR` at `%WINDIR%\Fonts` (unless it is already set) and registers every `.ttc` in that folder at startup. Scanning that folder makes the first start of an app tab take a moment longer. On macOS the offscreen platform uses Core Text and needs neither step.
+
+### Hosting other Qt applications
+
+An app tab hosts one program today: `WidgetApp`. Three things tie it to that program:
+
+- `BrowserBridge` is compiled into `WidgetApp`. It is not a library or a plugin, so another program cannot use it without being rebuilt with it.
+- The bridge takes a `GalleryWindow*`. It uses it in three places, to map `app://widgets/<page>` to a page and back. The rest of the bridge works for any `QWidget` windows: compositing, popups, dialogs, input, cursor and input method.
+- `BrowserTab::engineFor` maps the host `widgets` to the executable `WidgetApp` and knows no other.
+
+What can be shown in a tab depends on how it is drawn:
+
+| Content | Can it be shown in a tab? |
+|---|---|
+| A QML document served over HTTP | Yes. That is what a normal tab is. `QmlRenderer` draws it with `QQuickRenderControl`. |
+| A Qt Widgets application | Yes, once it is linked with the bridge. The bridge captures widgets with `QWidget::render`. |
+| A Qt Quick application (its own executable, `main()` and C++ types) | Not yet. `QmlRenderer` can load a `.qml` file but not the C++ types the application registers. The widget bridge cannot capture a `QQuickWindow`. |
+| `QQuickWidget`, `QOpenGLWidget`, `QVideoWidget` inside a Widgets app | No. `QWidget::render` does not capture GPU surfaces, so they stay blank. |
+| A program that does not use Qt | No. That would need window capture and input injection at the operating-system level, which is outside this design. |
+
+> [!IMPORTANT]
+> **Recommendation: make the bridge a Qt platform plugin (`-platform qmlbrowser`).**
+>
+> Qt loads a platform plugin before the application creates its first window. The plugin can give every window a backing store in shared memory and feed input in through `QWindowSystemInterface`, which is exactly what `BrowserBridge` does now. The difference is that the bridge would no longer live in the application:
+>
+> - **Unmodified Qt executables run in a tab.** The browser starts them with `-platform qmlbrowser` plus the channel arguments. They are not rebuilt or relinked.
+> - **Widgets and Qt Quick are both covered.** Widgets draw into the backing store as they do now. Qt Quick works with its software renderer (`QT_QUICK_BACKEND=software`). A Qt Quick app that needs the GPU renderer requires extra work in the plugin: an offscreen graphics surface and a readback of each frame.
+> - **Window stacking, popups and modality move into the plugin.** It sees every window being created, shown, raised and closed, so it does not have to infer them from events the way the bridge does.
+> - **The browser side stays almost the same.** `engineFor` looks the URL up in a table of registered applications instead of a single hard-coded name.
+>
+> The costs:
+>
+> - A platform plugin uses Qt's private API, so it must be built against the exact Qt version of every application it hosts: 6.10.3 for the Windows build, 6.7 for the macOS one.
+> - It is several days of work, against about one day for the shorter option below.
+>
+> **If the only goal is to host a few Widgets applications whose source you control**, do the shorter option instead:
+>
+> 1. Remove the three `GalleryWindow` uses from `BrowserBridge` and make page routing an optional callback.
+> 2. Build `BrowserBridge`, `IpcChannel` and `SharedPixels` as a static library.
+> 3. Let each application call one function from `main()` when it sees `--channel`.
+> 4. Map `app://<name>` to an executable through a configuration file read by `BrowserTab`.
+>
+> This keeps the code that has already been tested. It does not help with Qt Quick applications or programs you cannot rebuild.
 
 ## The window, on Windows
 
@@ -415,7 +546,7 @@ On macOS the same compositing path runs. The custom caption does not.
 ## Source tree
 
 ```
-qt.props                 Windows Qt location, warnings, output directories
+qt.props                 Windows Qt location and version, warnings, output directories
 QmlBrowser.sln            Windows solution
 build.bat                msbuild Debug or Release, x64
 run.bat                  QmlServer.exe, then QmlBrowser.exe
@@ -434,6 +565,8 @@ server\                  QmlServer.exe
   HttpServer.h/.cpp      GET/HEAD, keep-alive, types, listings, errors
   wwwroot\               the site the server reads
     index.qml about.qml gallery.qml docs.qml
+    ime.qml              input-method test bench, core Qt Quick fields
+    ime-controls.qml     the same with Qt Quick Controls
     shared\              qmldir, Page.qml, Card.qml, NavLink.qml
     assets\logo.svg
 
@@ -445,20 +578,31 @@ client\                  QmlBrowser.exe
   main.cpp               start URL, type registration, WindowFrame
   WindowFrame.h/.cpp     caption-less frame, Windows only
   TabManager.h/.cpp      local server, tab list, viewport size
-  BrowserTab.h/.cpp      one renderer process, history, IPC, frames
+  BrowserTab.h/.cpp      one tab process (renderer or app), history, IPC, frames, IME state
   BrowserHistory.h/.cpp  back/forward and address-bar resolution
-  TabViewport.h/.cpp     draws the active frame inside the browser window
+  TabViewport.h/.cpp     draws the active frame, forwards input, stands in for the IME
   ui\Browser.qml         chrome
   ui\TabButton.qml ui\ToolButton.qml
   resources.qrc          chrome compiled into the executable
 
+widgetapp\               WidgetApp.exe, the app://widgets tab
+  main.cpp               hosted (offscreen platform) or standalone start, dark Fusion theme
+  BrowserBridge.h/.cpp   renderer protocol for widgets: compositing, input, IME, cursor
+  GalleryWindow.h/.cpp   QMainWindow, menus, tool bar, page routing
+  ControlsPage.h/.cpp    buttons, menus, dialogs, text input, ranges, item views
+  PaintPage.h/.cpp       freehand canvas
+  PicturePage.h/.cpp     generated pictures with zoom, pan and rotation
+  VectorPage.h/.cpp      QGraphicsView scene, optional SVG item
+  VideoPage.h/.cpp       generated clip, optional Qt Multimedia playback
+  WidgetApp.vcxproj      Windows project; also copies the offscreen platform plugin
+
 renderer\                QmlRenderer.exe
   main.cpp               offscreen frame loop, IPC
-  OffscreenPage.h/.cpp   windowless Qt Quick rasterization
+  OffscreenPage.h/.cpp   windowless Qt Quick rasterization, input and IME replay
   Info.plist.in          LSUIElement so the macOS renderer bundle has no Dock icon
   PageView.h/.cpp        download and instantiate one document
   ui\Renderer.qml        page, spinner, error page, full-screen notice
   resources.qrc
 ```
 
-`client\GeneratedFiles\` and `renderer\GeneratedFiles\` are `moc` and `rcc` output. `bin\` and `obj\` are build output.
+`client\GeneratedFiles\`, `renderer\GeneratedFiles\` and `widgetapp\GeneratedFiles\` are `moc` and `rcc` output. `bin\` and `obj\` are build output.

@@ -156,6 +156,13 @@ int main(int argc, char *argv[])
         channel->send(message);
     });
 
+    QObject::connect(&page, &OffscreenPage::inputMethodChanged, &app,
+                     [channel](const QJsonObject &state) {
+                         QJsonObject message = state;
+                         message.insert(QStringLiteral("type"), QStringLiteral("ime"));
+                         channel->send(message);
+                     });
+
     QQuickItem *root = page.rootItem();
     QObject::connect(channel, &IpcChannel::received, &app,
                      [&page, root](const QJsonObject &message) {

@@ -33,13 +33,14 @@ Page {
             model: [
                 { name: "About",   url: "about.qml",   desc: "How the two halves fit together", tint: "#8ab4ff" },
                 { name: "Gallery", url: "gallery.qml", desc: "Animation and live rendering",    tint: "#7ce3b0" },
-                { name: "Docs",    url: "docs.qml",    desc: "The page-facing browser API",     tint: "#f0b775" }
+                { name: "Docs",    url: "docs.qml",    desc: "The page-facing browser API",     tint: "#f0b775" },
+                { name: "IME",     url: "ime.qml",     desc: "Text fields for input-method testing", tint: "#c9a2ff" }
             ]
 
             Rectangle {
                 required property var modelData
 
-                width: (tiles.width - 2 * tiles.spacing) / 3
+                width: (tiles.width - 3 * tiles.spacing) / 4
                 height: 132
                 radius: 14
                 color: tile.containsMouse ? "#1d2534" : "#161a24"
@@ -204,6 +205,96 @@ Page {
                         + Math.sin(page.phase + index * 0.52) * (18 + page.spread * 60)
                 }
             }
+        }
+    }
+
+    Card {
+        title: "Input methods"
+        accent: "#7ce3b0"
+
+        Text {
+            width: parent.width
+            text: "The page runs in a separate renderer process, so composed text from Pinyin " +
+                  "or Kotoeri input is relayed by the browser. Try it here, or open the " +
+                  "test bench for every field type and a live event log."
+            color: "#98a2b8"
+            font.pixelSize: 15
+            font.family: "Segoe UI"
+            wrapMode: Text.WordWrap
+        }
+
+        Rectangle {
+            width: parent.width
+            height: 40
+            radius: 10
+            color: "#0e1017"
+            border.width: 1
+            border.color: imeInput.activeFocus ? "#7ce3b0" : "#2b3247"
+
+            Behavior on border.color { ColorAnimation { duration: 120 } }
+
+            TextInput {
+                id: imeInput
+                x: 14
+                width: parent.width - 28
+                anchors.verticalCenter: parent.verticalCenter
+                color: "#eef2fb"
+                selectionColor: "#3f6bd8"
+                selectedTextColor: "#ffffff"
+                font.pixelSize: 16
+                clip: true
+                selectByMouse: true
+            }
+
+            Text {
+                anchors.fill: imeInput
+                verticalAlignment: Text.AlignVCenter
+                text: "Type 你好 or こんにちは"
+                color: "#4f5a72"
+                font: imeInput.font
+                visible: imeInput.text.length === 0 && imeInput.preeditText.length === 0
+            }
+        }
+
+        Text {
+            text: imeInput.inputMethodComposing
+                  ? "Composing: \"" + imeInput.preeditText + "\""
+                  : (imeInput.text.length > 0 ? imeInput.text.length + " characters committed"
+                                              : "Not composing")
+            color: imeInput.inputMethodComposing ? "#f0b775" : "#7d8ba6"
+            font.pixelSize: 14
+            font.family: "Segoe UI"
+        }
+
+        Row {
+            spacing: 22
+            NavLink { text: "IME test bench →"; url: "ime.qml"; color: "#7ce3b0" }
+            NavLink { text: "Qt Quick Controls version →"; url: "ime-controls.qml" }
+        }
+    }
+
+    Card {
+        title: "A Qt Widgets app in a tab"
+        accent: "#c9a2ff"
+
+        Text {
+            width: parent.width
+            text: "app://widgets is not a document. It is a separate Qt Widgets program that " +
+                  "paints its windows, menus and dialogs into shared memory and takes input " +
+                  "from the browser over the same socket this page uses. Controls, painting, " +
+                  "pictures, vector graphics and video, each one address."
+            color: "#98a2b8"
+            font.pixelSize: 15
+            font.family: "Segoe UI"
+            wrapMode: Text.WordWrap
+        }
+
+        Row {
+            spacing: 22
+            NavLink { text: "Open the app →"; url: "app://widgets"; color: "#c9a2ff" }
+            NavLink { text: "Paint"; url: "app://widgets/paint" }
+            NavLink { text: "Vectors"; url: "app://widgets/vectors" }
+            NavLink { text: "Video"; url: "app://widgets/video" }
         }
     }
 

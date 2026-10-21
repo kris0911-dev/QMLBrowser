@@ -133,8 +133,10 @@ QUrl BrowserHistory::resolve(const QString &text) const
     }
 
     const QString scheme = candidate.scheme();
+    // app:// names a native application the browser hosts in a tab.
     if (scheme != QLatin1String("http") && scheme != QLatin1String("https")
-        && scheme != QLatin1String("file") && scheme != QLatin1String("qrc")) {
+        && scheme != QLatin1String("file") && scheme != QLatin1String("qrc")
+        && scheme != QLatin1String("app")) {
         return QUrl(QStringLiteral("http://") + trimmed);
     }
 

@@ -20,6 +20,10 @@ QT_END_NAMESPACE
 // The renderer has no window. It submits compositor frames through shared
 // memory; this object keeps the latest one so the browser window can draw it,
 // and forwards input because the page itself cannot be clicked.
+//
+// app://widgets is the exception: that address is a Qt Widgets application,
+// WidgetApp.exe, which speaks the same protocol. Navigating between a QML
+// document and the app swaps the process behind the tab.
 class BrowserTab : public QObject
 {
     Q_OBJECT
@@ -37,6 +41,7 @@ class BrowserTab : public QObject
     Q_PROPERTY(qint64 rendererPid READ rendererPid NOTIFY stateChanged)
     Q_PROPERTY(bool canGoBack READ canGoBack NOTIFY stateChanged)
     Q_PROPERTY(bool canGoForward READ canGoForward NOTIFY stateChanged)
+    Q_PROPERTY(bool isApp READ isApp NOTIFY stateChanged)
 
 public:
     // Mirrors PageView::Status in the renderer process.
@@ -59,11 +64,16 @@ public:
     qint64 rendererPid() const { return m_rendererPid; }
     bool canGoBack() const { return m_history->canGoBack(); }
     bool canGoForward() const { return m_history->canGoForward(); }
+    // True while the tab hosts a native application rather than a document.
+    bool isApp() const { return m_engine == Engine::WidgetApp; }
 
     BrowserHistory *history() const { return m_history; }
     bool isAttached() const { return m_channel != nullptr; }
     QImage frame() const { return m_frame; }
     int cursorShape() const { return m_cursorShape; }
+    // The focused page item's input-method state, as last reported by the
+    // renderer. Empty when nothing in the page takes text.
+    QJsonObject inputMethodState() const { return m_inputMethod; }
 
     // Called by TabManager once the renderer has connected back.
     void attach(IpcChannel *channel, qint64 pid);
@@ -93,24 +103,34 @@ signals:
     void attached();
     void frameChanged();
     void cursorChanged(int shape);
+    // `queries` is the Qt::InputMethodQueries that changed. `focusMoved` means
+    // a different page item now has focus.
+    void inputMethodChanged(int queries, bool focusMoved);
     // A browser-level key combination pressed while the page had focus.
     void shortcutRequested(const QString &key);
     // The page called browser.setFullScreen().
     void fullScreenRequested(bool on);
 
 private:
+    // Which program draws the tab.
+    enum class Engine { QmlRenderer, WidgetApp };
+    static Engine engineFor(const QUrl &url);
+
     void startProcess();
     // Hangs up on the current renderer and lets it exit in the background.
     void releaseRenderer();
     void onProcessFinished(int exitCode, int status);
     void onMessage(const QJsonObject &message);
     void onFrame(const QJsonObject &message);
+    void onInputMethod(const QJsonObject &message);
+    void clearInputMethod();
     void sendCurrentUrl();
     void sendChromeState();
     void sendViewport();
 
     int m_id = 0;
     QString m_channelName;
+    Engine m_engine = Engine::QmlRenderer;
 
     QProcess *m_process = nullptr;
     QPointer<IpcChannel> m_channel;
@@ -138,4 +158,5 @@ private:
     SharedPixels m_pixels;
     QImage m_frame;
     int m_cursorShape = 0;
+    QJsonObject m_inputMethod;
 };
