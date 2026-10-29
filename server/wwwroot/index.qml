@@ -331,7 +331,9 @@ Page {
             text: "Items whose drawing is C++ code compiled into the renderer: a QPainter " +
                   "clock, a waveform built from scene graph geometry, and a Julia set " +
                   "computed pixel by pixel into a texture. A page uses them with " +
-                  "import QmlBrowser.Native."
+                  "import QmlBrowser.Native. Pixels can also come from a plugin: a plain C " +
+                  "library (.dll, .so or .dylib) in the renderer's canvas folder, with no Qt " +
+                  "in it, that a page loads by name with NativeCanvas."
             color: "#98a2b8"
             font.pixelSize: 15
             font.family: "Segoe UI"
@@ -340,7 +342,7 @@ Page {
 
         Row {
             spacing: 22
-            NavLink { text: "C++ components →"; url: "native.qml"; color: "#8ab4ff" }
+            NavLink { text: "C++ components and plugins →"; url: "native.qml"; color: "#8ab4ff" }
         }
     }
 
