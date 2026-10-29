@@ -11,6 +11,9 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "QmlBrowser", "client\QmlBro
 	EndProjectSection
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "QmlRenderer", "renderer\QmlRenderer.vcxproj", "{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840003}"
+	ProjectSection(ProjectDependencies) = postProject
+		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840006} = {8F1C4A21-6D3E-4B5A-9C10-2E7A5B840006}
+	EndProjectSection
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WidgetApp", "widgetapp\WidgetApp.vcxproj", "{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840004}"
 	ProjectSection(ProjectDependencies) = postProject
@@ -18,6 +21,13 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WidgetApp", "widgetapp\Widg
 	EndProjectSection
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "QmlBrowserHost", "apphost\QmlBrowserHost.vcxproj", "{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840005}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "PlasmaCanvas", "canvas\plasma\PlasmaCanvas.vcxproj", "{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840006}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "CanvasSmokeTest", "tests\CanvasSmokeTest.vcxproj", "{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840007}"
+	ProjectSection(ProjectDependencies) = postProject
+		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840006} = {8F1C4A21-6D3E-4B5A-9C10-2E7A5B840006}
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -45,6 +55,14 @@ Global
 		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840005}.Debug|x64.Build.0 = Debug|x64
 		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840005}.Release|x64.ActiveCfg = Release|x64
 		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840005}.Release|x64.Build.0 = Release|x64
+		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840006}.Debug|x64.ActiveCfg = Debug|x64
+		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840006}.Debug|x64.Build.0 = Debug|x64
+		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840006}.Release|x64.ActiveCfg = Release|x64
+		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840006}.Release|x64.Build.0 = Release|x64
+		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840007}.Debug|x64.ActiveCfg = Debug|x64
+		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840007}.Debug|x64.Build.0 = Debug|x64
+		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840007}.Release|x64.ActiveCfg = Release|x64
+		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840007}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

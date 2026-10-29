@@ -37,7 +37,7 @@ The shipped build is Windows (Visual Studio, Qt 6.10.3). macOS builds with CMake
 
 ### Windows
 
-Visual Studio 2022+ with the C++ workload, and Qt 6 for MSVC x64 (developed against 6.10.3). `build.bat [Debug|Release]` or `QmlBrowser.sln`; `run.bat` starts the server and then the browser. There is no CMake or qmake step: `moc` and `rcc` are MSBuild steps, and `windeployqt` copies the Qt DLLs next to the executables in `bin\x64\<Config>\`.
+Visual Studio 2022+ with the C++ workload, and Qt 6 for MSVC x64 (developed against 6.10.3). `build.bat [Debug|Release]` or `QmlBrowser.sln`; `run.bat` starts the server and then the browser; `test.bat` runs the smoke tests. There is no CMake or qmake step: `moc` and `rcc` are MSBuild steps, and `windeployqt` copies the Qt DLLs next to the executables in `bin\x64\<Config>\`.
 
 | Setting | |
 |---|---|
@@ -123,11 +123,44 @@ Rectangle {
 | `setFullScreen(on)` | Ask the window to enter or leave full screen |
 | `crash()` | Abort this renderer (to see tab isolation) |
 
+`import QmlBrowser.Native` gives a page the item types drawn in C++ inside the renderer; see [Drawing from C++](#drawing-from-c).
+
 Relative URLs, images and `import "shared"` resolve against the document URL, so a folder with a `qmldir` works as a remote module (`server\wwwroot\shared\`: `Page`, `Card`, `NavLink`). A page cannot read local files and can import only modules the renderer ships. Text fields need nothing for input methods; `Qt.ImhHiddenText`, `ImhDigitsOnly`, `ImhFormattedNumbersOnly` and password echo keep the IME off.
 
 How a load works: the browser sends `navigate`; `PageView` GETs it (`AlwaysNetwork`, user agent `QmlBrowser/1.0`); any response with a body, a 404 included, goes to `QQmlComponent::setData(body, url)`; compile errors become the error page; the renderer reports `state` and `source`. The `404 /qmldir` line in the server log is the QML engine probing for a module and is harmless.
 
-Sample site (`server\wwwroot`): `index.qml`, `about.qml`, `docs.qml`, `gallery.qml`, `ime.qml` and `ime-controls.qml` (input-method test benches), `3d.qml` with `scene3d/QuickScene.qml` (see [3D](#3d)), `shared/`, `assets/`.
+Sample site (`server\wwwroot`): `index.qml`, `about.qml`, `docs.qml`, `gallery.qml`, `ime.qml` and `ime-controls.qml` (input-method test benches), `3d.qml` with `scene3d/QuickScene.qml` (see [3D](#3d)), `native.qml` (see [Drawing from C++](#drawing-from-c)), `shared/`, `assets/`.
+
+### Drawing from C++
+
+The renderer registers C++ item types under `QmlBrowser.Native` (`renderer\native\`, registered by `registerNativeItems()` in `NativeItems.cpp` before any page compiles). `/native.qml` uses each one:
+
+| Type | Base class | How it draws | Properties |
+|---|---|---|---|
+| `ClockFace` | `QQuickPaintedItem` | `paint()` with a `QPainter`; the item becomes a texture | `accent`, `face`, `sweep`, `offsetMinutes`, `timeText` (read-only) |
+| `WaveShape` | `QQuickItem` | `updatePaintNode()` fills `QSGGeometry`: a vertex-coloured triangle strip and an indexed, feathered line | `amplitude`, `frequency`, `phase`, `lineWidth`, `lineColor`, `fillTop`, `fillBottom`; `valueAt(x)` |
+| `JuliaSet` | `QQuickItem` | `updatePolish()` computes a `QImage`; `updatePaintNode()` uploads it as a `QSGSimpleTextureNode` | `cx`, `cy`, `maxIterations`, `hue`, `renderTime` (read-only, ms); `toComplex(x, y)` |
+| `NativeCanvas` | `QQuickItem` | As `JuliaSet`, but a plain C library fills the image; see [Canvas libraries](#canvas-libraries) | `library`, `time`, `status` (`NativeCanvas.Null/Ready/Error`), `errorString`, `renderTime` |
+
+Pick by how often the item changes. `QQuickPaintedItem` is the simplest but repaints the whole image on every `update()`. Geometry nodes cost almost nothing per frame, so QML can animate them. A computed image suits per-pixel work; do it in `updatePolish()`, which runs on the GUI thread, so the item can still emit signals.
+
+To add one: put the class in `renderer\native\`, add a `qmlRegisterType` line to `NativeItems.cpp`, and add the files to `CMakeLists.txt` and `QmlRenderer.vcxproj` (a `.cpp`, a `moc` step for the header and its `moc_*.cpp`). A page can import only types the renderer was built with, and every site the browser opens can use them: expose drawing, never file, process or network access.
+
+### Canvas libraries
+
+A canvas library is a plain shared library, with no Qt in it, that draws pixels for `NativeCanvas`. Because only C types cross the boundary, it survives Qt upgrades and can be written in any language that exports C functions. It implements `canvas\include\qmlbrowser_canvas.h`:
+
+```c
+int  qmlbrowser_canvas_abi(void);   /* returns QMLBROWSER_CANVAS_ABI */
+void qmlbrowser_canvas_draw(uint32_t *pixels, int width, int height,
+                            int stride /* bytes */, double time);
+```
+
+Pixels are `0xAARRGGBB`, premultiplied (`QImage::Format_ARGB32_Premultiplied`). A page writes `NativeCanvas { library: "plasma"; time: ... }`, and the renderer loads `canvas\plasma.dll` (`.so`, `.dylib`) from its own folder. Only letters, digits, `-` and `_` are accepted, so a page cannot name a path; a library with the wrong ABI version or missing exports gives `status: NativeCanvas.Error` and a reason in `errorString`. `draw` runs on the renderer's GUI thread, and a crash in it takes down only that tab. Like everything in `QmlBrowser.Native`, every site can use an installed library.
+
+The sample is `canvas\plasma\plasma.c` (`PlasmaCanvas.vcxproj`, output `bin\x64\<Config>\canvas\plasma.dll`, the same name in Debug and Release). The renderer draws at most 960 pixels across and scales up.
+
+**Smoke test.** `tests\CanvasSmokeTest` loads `plasma` the way the renderer does and then shows it through a real `NativeCanvas` in a QML scene. It checks that names which are paths are rejected, that a missing library is reported, that the library fills every pixel opaquely, honours `stride` and reacts to `time`, and that the grabbed QML frame shows the plasma. It runs headless (offscreen platform, software scene graph), so it needs no GPU: `test.bat [Debug|Release]` on Windows, `ctest` in a CMake build.
 
 ## The HTTP server
 
@@ -272,7 +305,8 @@ What a tab can show today:
 ## Source tree
 
 ```
-qt.props, QmlBrowser.sln, build.bat, run.bat     Windows build
+qt.props, QmlBrowser.sln, build.bat, run.bat,
+test.bat                                         Windows build
 CMakeLists.txt, CMakePresets.json, build-macos.sh macOS build
 shared\        IpcChannel (JSON over a local socket), SharedPixels (shared-memory frames)
 server\        QmlServer: main.cpp, HttpServer; wwwroot\ is the sample site
@@ -287,6 +321,8 @@ client\        QmlBrowser
 renderer\      QmlRenderer
   OffscreenPage                 windowless Qt Quick rendering, input and IME replay
   PageView                      downloads and instantiates a document
+  native\                       C++ items for pages: ClockFace, WaveShape, JuliaSet,
+                                NativeCanvas and its loader, CanvasLibrary
   deploy\                       module lists for windeployqt
   ui\                           spinner, error page, notices
 apphost\       QmlBrowserHost
@@ -298,6 +334,9 @@ apphost\       QmlBrowserHost
   src\NativePlatform            GPU mode setup
 widgetapp\     WidgetApp: GalleryWindow and its pages
                (Controls, Paint, Picture, Vector, Video, Scene = 3D)
+canvas\        Canvas libraries: include\qmlbrowser_canvas.h, the C interface;
+               plasma\, the sample
+tests\         CanvasSmokeTest (Qt Test, headless)
 ```
 
 `GeneratedFiles\` folders hold `moc`/`rcc` output; `bin\` and `obj\` are build output.

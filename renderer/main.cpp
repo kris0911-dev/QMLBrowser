@@ -1,6 +1,7 @@
 #include "IpcChannel.h"
 #include "OffscreenPage.h"
 #include "PageView.h"
+#include "native/NativeItems.h"
 
 #include <QCommandLineParser>
 #include <QGuiApplication>
@@ -95,6 +96,7 @@ int main(int argc, char *argv[])
     }
 
     qmlRegisterType<PageView>("QmlRenderer", 1, 0, "PageView");
+    registerNativeItems();
 
     OffscreenPage page;
     if (!page.load())

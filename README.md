@@ -25,6 +25,7 @@ process, and that tab shows a recovery page.
 ```bat
 build.bat            REM Debug; build.bat Release for Release
 run.bat              REM starts QmlServer, then QmlBrowser
+test.bat             REM headless smoke tests
 ```
 
 Output goes to `bin\x64\<Config>\`. Opening `QmlBrowser.sln` and building does
@@ -61,6 +62,7 @@ Worth opening:
 
 - `/gallery.qml`: animation, gradients, Canvas
 - `/3d.qml`: a Qt Quick 3D scene, and a cube in plain Qt Quick
+- `/native.qml`: items drawn by C++ in the renderer (QPainter, scene graph geometry, a computed texture), and pixels from a plain C library (`canvas\plasma.dll`)
 - `/ime.qml`, `/ime-controls.qml`: input-method test pages (Chinese, Japanese, …)
 - `app://widgets` (the ▣ button): the Widgets app; `app://widgets/3d` is its OpenGL page
 

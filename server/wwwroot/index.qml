@@ -323,6 +323,28 @@ Page {
     }
 
     Card {
+        title: "Drawn in C++"
+        accent: "#8ab4ff"
+
+        Text {
+            width: parent.width
+            text: "Items whose drawing is C++ code compiled into the renderer: a QPainter " +
+                  "clock, a waveform built from scene graph geometry, and a Julia set " +
+                  "computed pixel by pixel into a texture. A page uses them with " +
+                  "import QmlBrowser.Native."
+            color: "#98a2b8"
+            font.pixelSize: 15
+            font.family: "Segoe UI"
+            wrapMode: Text.WordWrap
+        }
+
+        Row {
+            spacing: 22
+            NavLink { text: "C++ components →"; url: "native.qml"; color: "#8ab4ff" }
+        }
+    }
+
+    Card {
         title: "Try the address bar"
         accent: "#f0b775"
 

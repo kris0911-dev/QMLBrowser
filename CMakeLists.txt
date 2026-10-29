@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.22)
 # toolchain records it. Windows ignores the variable.
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version" FORCE)
 
-project(QmlBrowser VERSION 1.0 LANGUAGES CXX)
+project(QmlBrowser VERSION 1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -17,9 +17,9 @@ set(CMAKE_XCODE_GENERATE_SCHEME ON)
 # macOS 12.6 stops at Xcode 14.2, so that build stays on Qt 6.7.
 # Windows keeps the Qt 6.10 kit in qt.props.
 if(APPLE)
-    find_package(Qt6 6.7...<6.8 REQUIRED COMPONENTS Core Network Gui Qml Quick Widgets OpenGL OpenGLWidgets)
+    find_package(Qt6 6.7...<6.8 REQUIRED COMPONENTS Core Network Gui Qml Quick Widgets OpenGL OpenGLWidgets Test)
 else()
-    find_package(Qt6 6.10 REQUIRED COMPONENTS Core Network Gui Qml Quick Widgets OpenGL OpenGLWidgets)
+    find_package(Qt6 6.10 REQUIRED COMPONENTS Core Network Gui Qml Quick Widgets OpenGL OpenGLWidgets Test)
 endif()
 # The widget app uses these when the kit has them. Without Qt SVG the vector
 # page skips its SVG item; without Qt Multimedia the video page plays only
@@ -88,9 +88,60 @@ qt_add_executable(QmlRenderer
     renderer/OffscreenPage.h
     renderer/PageView.cpp
     renderer/PageView.h
+    renderer/native/CanvasLibrary.cpp
+    renderer/native/CanvasLibrary.h
+    renderer/native/ClockFace.cpp
+    renderer/native/ClockFace.h
+    renderer/native/JuliaSet.cpp
+    renderer/native/JuliaSet.h
+    renderer/native/NativeCanvas.cpp
+    renderer/native/NativeCanvas.h
+    renderer/native/NativeItems.cpp
+    renderer/native/NativeItems.h
+    renderer/native/WaveShape.cpp
+    renderer/native/WaveShape.h
     renderer/resources.qrc
 )
+target_include_directories(QmlRenderer PRIVATE "${CMAKE_SOURCE_DIR}/canvas/include")
 target_link_libraries(QmlRenderer PRIVATE qmlbrowser_ipc Qt6::Gui Qt6::GuiPrivate Qt6::Qml Qt6::Quick)
+
+# A canvas library: plain C, no Qt (canvas/include/qmlbrowser_canvas.h). The
+# renderer loads canvas/<name> from its own folder, so the build copies it
+# there and next to the smoke test.
+add_library(plasma SHARED canvas/plasma/plasma.c)
+target_include_directories(plasma PRIVATE "${CMAKE_SOURCE_DIR}/canvas/include")
+set_target_properties(plasma PROPERTIES PREFIX "" C_VISIBILITY_PRESET hidden)
+if(UNIX AND NOT APPLE)
+    target_link_libraries(plasma PRIVATE m)
+endif()
+
+# Loads the plasma library and shows it through NativeCanvas, headless.
+qt_add_executable(CanvasSmokeTest
+    tests/CanvasSmokeTest.cpp
+    tests/CanvasSmokeTest.h
+    renderer/native/CanvasLibrary.cpp
+    renderer/native/CanvasLibrary.h
+    renderer/native/NativeCanvas.cpp
+    renderer/native/NativeCanvas.h
+)
+target_include_directories(CanvasSmokeTest PRIVATE
+    "${CMAKE_SOURCE_DIR}/renderer/native"
+    "${CMAKE_SOURCE_DIR}/canvas/include")
+target_link_libraries(CanvasSmokeTest PRIVATE Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Test)
+set_target_properties(CanvasSmokeTest PROPERTIES MACOSX_BUNDLE FALSE WIN32_EXECUTABLE FALSE)
+
+foreach(_canvas_host QmlRenderer CanvasSmokeTest)
+    add_custom_command(TARGET plasma POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${_canvas_host}>/canvas"
+        COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:plasma>" "$<TARGET_FILE_DIR:${_canvas_host}>/canvas/"
+        COMMENT "Copy the plasma canvas library next to ${_canvas_host}"
+        VERBATIM)
+endforeach()
+add_dependencies(QmlRenderer plasma)
+add_dependencies(CanvasSmokeTest plasma)
+
+enable_testing()
+add_test(NAME CanvasSmokeTest COMMAND CanvasSmokeTest)
 
 # Puts a Qt Widgets application in an app://<name> tab. An application links
 # this and calls QmlBrowserHost::prepare() and attach() from main(). Only
