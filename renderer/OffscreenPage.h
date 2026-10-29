@@ -1,12 +1,12 @@
 #pragma once
 
-#include <QElapsedTimer>
 #include <QJsonObject>
 #include <QObject>
 #include <QPointF>
 #include <QPointer>
 #include <QSize>
 
+#include "InputEvents.h"
 #include "PageView.h"
 #include "SharedPixels.h"
 
@@ -57,6 +57,9 @@ signals:
     // focused page item: whether it takes text, hints, the cursor rectangle in
     // viewport coordinates and the text around the cursor.
     void inputMethodChanged(const QJsonObject &state);
+    // A trackpad swipe the page left alone: "direction" and "fingers"
+    // (shared/InputEvents.h).
+    void swiped(const QJsonObject &swipe);
 
 private:
     void scheduleRender();
@@ -67,9 +70,9 @@ private:
     QString prepareSlot(int index, int bytes);
     void ensureActive();
     void publishCursor();
-    quint64 eventTime() const;
     void deliverMouse(QEvent::Type type, const QJsonObject &message);
     void deliverWheel(const QJsonObject &message);
+    void deliverGesture(const QJsonObject &message);
     void deliverHover(const QJsonObject &message);
     void deliverKey(QEvent::Type type, const QJsonObject &message);
     void deliverFocus(bool on);
@@ -88,8 +91,14 @@ private:
     QRhiTextureRenderTarget *m_target = nullptr;
     QRhiRenderPassDescriptor *m_pass = nullptr;
     QTimer *m_renderTimer = nullptr;
-    // Timestamps for the input events made here, see eventTime().
-    QElapsedTimer m_inputClock;
+    // Timestamps for the input events made here. Events built here have none
+    // unless one is set, and Flickable measures wheel and drag speed from
+    // them. With none it falls back to a timer that only a press or a
+    // ScrollBegin phase starts. A mouse wheel on Windows sends neither, so
+    // before the first click every wheel event looked simultaneous with the
+    // last one, and a page stopped scrolling after its first flick settled.
+    InputClock m_inputClock;
+    SwipeNavigation m_swipe;
 
     struct Slot {
         SharedPixels pixels;

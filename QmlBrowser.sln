@@ -29,6 +29,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "CanvasSmokeTest", "tests\Ca
 		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840006} = {8F1C4A21-6D3E-4B5A-9C10-2E7A5B840006}
 	EndProjectSection
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "InputEventsTest", "tests\InputEventsTest.vcxproj", "{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840008}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -63,6 +65,10 @@ Global
 		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840007}.Debug|x64.Build.0 = Debug|x64
 		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840007}.Release|x64.ActiveCfg = Release|x64
 		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840007}.Release|x64.Build.0 = Release|x64
+		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840008}.Debug|x64.ActiveCfg = Debug|x64
+		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840008}.Debug|x64.Build.0 = Debug|x64
+		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840008}.Release|x64.ActiveCfg = Release|x64
+		{8F1C4A21-6D3E-4B5A-9C10-2E7A5B840008}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

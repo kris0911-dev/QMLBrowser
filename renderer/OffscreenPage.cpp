@@ -17,7 +17,6 @@
 #include <QQuickWindow>
 #include <QTextCharFormat>
 #include <QTimer>
-#include <QWheelEvent>
 
 #include <rhi/qrhi.h>
 
@@ -85,8 +84,6 @@ OffscreenPage::OffscreenPage(QObject *parent)
     : QObject(parent)
     , m_pid(QCoreApplication::applicationPid())
 {
-    m_inputClock.start();
-
     m_renderTimer = new QTimer(this);
     m_renderTimer->setSingleShot(true);
     m_renderTimer->setInterval(0);
@@ -395,17 +392,6 @@ void OffscreenPage::publishCursor()
     emit cursorChanged(shape);
 }
 
-quint64 OffscreenPage::eventTime() const
-{
-    // Events built here have no timestamp unless one is set, and Flickable
-    // measures wheel and drag speed from timestamps. With none it falls back
-    // to a timer that only a press or a ScrollBegin phase starts. A mouse
-    // wheel on Windows sends neither, so before the first click every wheel
-    // event looked simultaneous with the last one, and a page stopped
-    // scrolling after its first flick settled. Never 0, which means unset.
-    return quint64(m_inputClock.elapsed()) + 1;
-}
-
 void OffscreenPage::deliverInput(const QJsonObject &message)
 {
     const QString kind = message.value(QStringLiteral("kind")).toString();
@@ -421,6 +407,8 @@ void OffscreenPage::deliverInput(const QJsonObject &message)
         deliverMouse(type, message);
     } else if (kind == QLatin1String("wheel")) {
         deliverWheel(message);
+    } else if (kind == QLatin1String("gesture")) {
+        deliverGesture(message);
     } else if (kind == QLatin1String("hover")) {
         deliverHover(message);
     } else if (kind == QLatin1String("key")) {
@@ -445,7 +433,7 @@ void OffscreenPage::deliverMouse(QEvent::Type type, const QJsonObject &message)
     const QPointF pos = pointFrom(message);
     QMouseEvent event(type, pos, pos, pos, buttonFrom(message), buttonsFrom(message),
                       modsFrom(message));
-    event.setTimestamp(eventTime());
+    event.setTimestamp(m_inputClock.time(message));
     QCoreApplication::sendEvent(m_window, &event);
     m_lastHover = pos;
     publishCursor();
@@ -455,16 +443,24 @@ void OffscreenPage::deliverWheel(const QJsonObject &message)
 {
     if (!m_window)
         return;
-    const QPointF pos = pointFrom(message);
-    const QPoint pixel(message.value(QStringLiteral("px")).toInt(),
-                       message.value(QStringLiteral("py")).toInt());
-    const QPoint angle(message.value(QStringLiteral("ax")).toInt(),
-                       message.value(QStringLiteral("ay")).toInt());
-    QWheelEvent event(pos, pos, pixel, angle, buttonsFrom(message), modsFrom(message),
-                      Qt::ScrollPhase(message.value(QStringLiteral("phase")).toInt()),
-                      message.value(QStringLiteral("inverted")).toBool());
-    event.setTimestamp(eventTime());
-    QCoreApplication::sendEvent(m_window, &event);
+    const auto event = InputEvents::wheelEvent(message, m_inputClock.time(message));
+    QCoreApplication::sendEvent(m_window, event.get());
+    const QJsonObject swipe = m_swipe.observe(message, event->isAccepted());
+    if (!swipe.isEmpty())
+        emit swiped(swipe);
+}
+
+void OffscreenPage::deliverGesture(const QJsonObject &message)
+{
+    if (!m_window)
+        return;
+    // A trackpad pinch, rotation or smart zoom, which a PinchHandler follows,
+    // or a three-finger swipe.
+    const auto event = InputEvents::gestureEvent(message, m_inputClock.time(message));
+    QCoreApplication::sendEvent(m_window, event.get());
+    const QJsonObject swipe = m_swipe.observe(message, event->isAccepted());
+    if (!swipe.isEmpty())
+        emit swiped(swipe);
 }
 
 void OffscreenPage::deliverHover(const QJsonObject &message)
@@ -475,7 +471,7 @@ void OffscreenPage::deliverHover(const QJsonObject &message)
     const QPointF pos = leave ? m_lastHover : pointFrom(message);
     const QEvent::Type type = leave ? QEvent::HoverLeave : QEvent::HoverMove;
     QHoverEvent event(type, pos, pos, m_lastHover, modsFrom(message));
-    event.setTimestamp(eventTime());
+    event.setTimestamp(m_inputClock.time(message));
     QCoreApplication::sendEvent(m_window, &event);
     if (!leave)
         m_lastHover = pos;
@@ -496,7 +492,7 @@ void OffscreenPage::deliverKey(QEvent::Type type, const QJsonObject &message)
                     quint32(message.value(QStringLiteral("nativeMods")).toDouble()),
                     message.value(QStringLiteral("text")).toString(),
                     message.value(QStringLiteral("repeat")).toBool());
-    event.setTimestamp(eventTime());
+    event.setTimestamp(m_inputClock.time(message));
     QCoreApplication::sendEvent(m_window, &event);
 }
 

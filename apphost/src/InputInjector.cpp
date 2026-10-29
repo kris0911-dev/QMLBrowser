@@ -89,8 +89,6 @@ InputInjector::InputInjector(WindowCompositor *windows, QObject *parent)
     : QObject(parent)
     , m_windows(windows)
 {
-    m_clock.start();
-
     m_cursorTimer = new QTimer(this);
     m_cursorTimer->setSingleShot(true);
     m_cursorTimer->setInterval(0);
@@ -167,6 +165,8 @@ void InputInjector::deliver(const QJsonObject &message)
         // presses itself, the same way it does for a platform window.
     } else if (kind == QLatin1String("wheel")) {
         deliverWheel(message);
+    } else if (kind == QLatin1String("gesture")) {
+        deliverGesture(message);
     } else if (kind == QLatin1String("hover")) {
         deliverHover(message);
     } else if (kind == QLatin1String("key")) {
@@ -273,7 +273,7 @@ void InputInjector::deliverMouse(QEvent::Type type, const QJsonObject &message)
     QWindow *handle = target->windowHandle();
     const QPointF local = global - QPointF(target->geometry().topLeft());
     QWindowSystemInterface::handleMouseEvent<Sync>(
-            handle, ulong(m_clock.elapsed()), nativeLocal(local, handle),
+            handle, ulong(m_clock.time(message)), nativeLocal(local, handle),
             nativeGlobal(global, handle), buttons, button, type, modsFrom(message));
     updateCursor();
 }
@@ -291,13 +291,52 @@ void InputInjector::deliverWheel(const QJsonObject &message)
     const QPoint angle(message.value(QStringLiteral("ax")).toInt(),
                        message.value(QStringLiteral("ay")).toInt());
     QWindow *handle = target->windowHandle();
-    QWindowSystemInterface::handleWheelEvent(
-            handle, ulong(m_clock.elapsed()),
+    // The device and source as the browser's platform reported them: a
+    // trackpad scroll is synthesized by the system, and Qt Quick scrolls only
+    // that by pixels (shared/InputEvents.h). This overload has no delivery
+    // parameter; delivered right away, its result says whether the
+    // application took the scroll, which decides swiping between pages.
+    QWindowSystemInterface::setSynchronousWindowSystemEvents(true);
+    const bool taken = QWindowSystemInterface::handleWheelEvent(
+            handle, ulong(m_clock.time(message)), InputEvents::device(message),
             nativeLocal(global - QPointF(target->geometry().topLeft()), handle),
             nativeGlobal(global, handle), pixel, angle,
             modsFrom(message), Qt::ScrollPhase(message.value(QStringLiteral("phase")).toInt()),
-            Qt::MouseEventNotSynthesized, message.value(QStringLiteral("inverted")).toBool());
+            InputEvents::source(message), message.value(QStringLiteral("inverted")).toBool());
+    QWindowSystemInterface::setSynchronousWindowSystemEvents(false);
     m_lastGlobal = global;
+
+    const QJsonObject swipe = m_swipe.observe(message, taken);
+    if (!swipe.isEmpty())
+        emit swiped(swipe);
+}
+
+void InputInjector::deliverGesture(const QJsonObject &message)
+{
+    // A trackpad pinch, rotation, smart zoom or swipe, into the window under
+    // the pointer as the platform sends it.
+    const QPointF global = pointFrom(message) + m_windows->origin();
+    QWidget *target = mouseTarget(global);
+    if (!target || !target->windowHandle())
+        return;
+
+    QWindow *handle = target->windowHandle();
+    QWindowSystemInterface::handleGestureEventWithValueAndDelta(
+            handle, ulong(m_clock.time(message)), InputEvents::device(message),
+            Qt::NativeGestureType(message.value(QStringLiteral("type")).toInt()),
+            message.value(QStringLiteral("value")).toDouble(),
+            QPointF(message.value(QStringLiteral("dx")).toDouble(),
+                    message.value(QStringLiteral("dy")).toDouble()),
+            nativeLocal(global - QPointF(target->geometry().topLeft()), handle),
+            nativeGlobal(global, handle), message.value(QStringLiteral("fingers")).toInt());
+    m_lastGlobal = global;
+
+    // Qt does not report whether an application took a native gesture, and
+    // widgets have no handler for a swipe, so a three-finger swipe is the
+    // browser's.
+    const QJsonObject swipe = m_swipe.observe(message, false);
+    if (!swipe.isEmpty())
+        emit swiped(swipe);
 }
 
 void InputInjector::deliverHover(const QJsonObject &message)
@@ -327,7 +366,7 @@ void InputInjector::deliverKey(QEvent::Type type, const QJsonObject &message)
             activate(target);
     }
 
-    const ulong timestamp = ulong(m_clock.elapsed());
+    const ulong timestamp = ulong(m_clock.time(message));
     const int key = message.value(QStringLiteral("key")).toInt();
     const Qt::KeyboardModifiers mods = modsFrom(message);
     const auto scan = quint32(message.value(QStringLiteral("scan")).toDouble());

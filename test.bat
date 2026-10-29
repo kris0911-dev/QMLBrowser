@@ -10,13 +10,18 @@ set "CONFIG=%~1"
 if "%CONFIG%"=="" set "CONFIG=Debug"
 set "BIN=%~dp0bin\x64\%CONFIG%"
 
-if not exist "%BIN%\CanvasSmokeTest.exe" (
-    echo %BIN%\CanvasSmokeTest.exe not found. Run "build.bat %CONFIG%" first.
-    exit /b 1
+for %%t in (CanvasSmokeTest InputEventsTest) do (
+    if not exist "%BIN%\%%t.exe" (
+        echo %BIN%\%%t.exe not found. Run "build.bat %CONFIG%" first.
+        exit /b 1
+    )
 )
 
+set "RESULT=0"
 "%BIN%\CanvasSmokeTest.exe"
-set "RESULT=%ERRORLEVEL%"
+if errorlevel 1 set "RESULT=1"
+"%BIN%\InputEventsTest.exe"
+if errorlevel 1 set "RESULT=1"
 
 echo.
 if "%RESULT%"=="0" (echo Smoke tests passed.) else (echo Smoke tests FAILED.)

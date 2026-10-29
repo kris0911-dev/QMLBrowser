@@ -84,6 +84,8 @@ On Windows the tab strip is the title bar: drag empty space to move, double-clic
 | F11 | Full screen; Esc leaves |
 | Ctrl+Shift+F | Hide the bars; Esc restores |
 
+On a Mac trackpad, swipe between pages goes back and forward as in Safari: two fingers sideways, or three if System Settings > Trackpad asks for three. A page that scrolls sideways keeps the swipe. Scrolling, pinch, smart zoom, rotation, tap, secondary click and three-finger drag reach the page as the platform reports them; Mission Control, App Exposé, Launchpad, Show Desktop, Notification Center and swiping between full-screen apps belong to macOS.
+
 Shortcuts belong to the browser window, so they work while a page has focus. Esc is only claimed while the chrome is hidden. Full screen and hidden bars are independent.
 
 The address bar (`BrowserHistory::resolve`):
@@ -160,7 +162,7 @@ Pixels are `0xAARRGGBB`, premultiplied (`QImage::Format_ARGB32_Premultiplied`). 
 
 The sample is `canvas\plasma\plasma.c` (`PlasmaCanvas.vcxproj`, output `bin\x64\<Config>\canvas\plasma.dll`, the same name in Debug and Release). The renderer draws at most 960 pixels across and scales up.
 
-**Smoke test.** `tests\CanvasSmokeTest` loads `plasma` the way the renderer does and then shows it through a real `NativeCanvas` in a QML scene. It checks that names which are paths are rejected, that a missing library is reported, that the library fills every pixel opaquely, honours `stride` and reacts to `time`, and that the grabbed QML frame shows the plasma. It runs headless (offscreen platform, software scene graph), so it needs no GPU: `test.bat [Debug|Release]` on Windows, `ctest` in a CMake build.
+**Smoke test.** `tests\CanvasSmokeTest` loads `plasma` the way the renderer does and then shows it through a real `NativeCanvas` in a QML scene. It checks that names which are paths are rejected, that a missing library is reported, that the library fills every pixel opaquely, honours `stride` and reacts to `time`, and that the grabbed QML frame shows the plasma. It runs headless (offscreen platform, software scene graph), so it needs no GPU: `test.bat [Debug|Release]` on Windows, `ctest` in a CMake build. `tests\InputEventsTest` sends a macOS-style trackpad scroll and pinch to a Qt Quick scene twice, directly and through the browser's input messages read in one batch, and checks that both scenes end up the same.
 
 ## The HTTP server
 
@@ -218,9 +220,10 @@ Tab to browser:
 | `cursor` | `shape` | `Qt::CursorShape` |
 | `navigate` | `url` | The page asked to go somewhere; the browser owns history and sends `navigate` back |
 | `fullscreen` | `on` | The page called `setFullScreen` |
+| `swipe` | `direction`, `fingers` | A trackpad swipe between pages that the page did not take; the browser goes back or forward |
 | `ime` | `serial`, `enabled`, rects, text, positions | Focused field's input-method state; see below |
 
-`input` kinds: `mouse` (`action` press/release/move/dbl, `x`, `y`, `button`, `buttons`, `mods`), `hover` (move/leave), `wheel` (pixel and angle deltas, `phase`, `inverted`), `key` (`action`, `key`, `text`, `mods`, `repeat`, native codes), `focus` (`on`), `ime` (`preedit`, `commit`, replacement range, `attributes`).
+`input` kinds: `mouse` (`action` press/release/move/dbl, `x`, `y`, `button`, `buttons`, `mods`), `hover` (move/leave), `wheel` (pixel and angle deltas, `phase`, `inverted`, `source`, `touchpad`), `gesture` (a trackpad pinch, rotation, smart zoom or swipe: `type`, `value`, `dx`, `dy`, `fingers`, `touchpad`), `key` (`action`, `key`, `text`, `mods`, `repeat`, native codes), `focus` (`on`), `ime` (`preedit`, `commit`, replacement range, `attributes`). Pointer and key messages carry `t`, the time the platform gave the event; the receiver moves it onto its own clock. A page rebuilds each event with the source and device the platform reported, because Flickable scrolls by pixels only for a wheel event the system synthesized from a trackpad, as macOS reports a two-finger scroll, and measures speed from the event times (`shared/InputEvents.h`).
 
 ## Input methods
 
@@ -308,7 +311,8 @@ What a tab can show today:
 qt.props, QmlBrowser.sln, build.bat, run.bat,
 test.bat                                         Windows build
 CMakeLists.txt, CMakePresets.json, build-macos.sh macOS build
-shared\        IpcChannel (JSON over a local socket), SharedPixels (shared-memory frames)
+shared\        IpcChannel (JSON over a local socket), SharedPixels (shared-memory frames),
+               InputEvents (wheel and gesture messages, event times)
 server\        QmlServer: main.cpp, HttpServer; wwwroot\ is the sample site
 nodejs\        server.js, the same server on Node.js
 client\        QmlBrowser
@@ -336,7 +340,7 @@ widgetapp\     WidgetApp: GalleryWindow and its pages
                (Controls, Paint, Picture, Vector, Video, Scene = 3D)
 canvas\        Canvas libraries: include\qmlbrowser_canvas.h, the C interface;
                plasma\, the sample
-tests\         CanvasSmokeTest (Qt Test, headless)
+tests\         CanvasSmokeTest, InputEventsTest (Qt Test, headless)
 ```
 
 `GeneratedFiles\` folders hold `moc`/`rcc` output; `bin\` and `obj\` are build output.

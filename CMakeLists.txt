@@ -15,11 +15,13 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_XCODE_GENERATE_SCHEME ON)
 
 # macOS 12.6 stops at Xcode 14.2, so that build stays on Qt 6.7.
-# Windows keeps the Qt 6.10 kit in qt.props.
+# Windows keeps the Qt 6.10 kit in qt.props. The renderer and QmlBrowserHost
+# use Qt6::GuiPrivate. Qt 6.7 defines it along with Gui; from Qt 6.9 it is a
+# package of its own that has to be asked for.
 if(APPLE)
     find_package(Qt6 6.7...<6.8 REQUIRED COMPONENTS Core Network Gui Qml Quick Widgets OpenGL OpenGLWidgets Test)
 else()
-    find_package(Qt6 6.10 REQUIRED COMPONENTS Core Network Gui Qml Quick Widgets OpenGL OpenGLWidgets Test)
+    find_package(Qt6 6.10 REQUIRED COMPONENTS Core Network Gui GuiPrivate Qml Quick Widgets OpenGL OpenGLWidgets Test)
 endif()
 # The widget app uses these when the kit has them. Without Qt SVG the vector
 # page skips its SVG item; without Qt Multimedia the video page plays only
@@ -40,13 +42,15 @@ qt_standard_project_setup()
 set(CMAKE_AUTORCC ON)
 
 qt_add_library(qmlbrowser_ipc STATIC
+    shared/InputEvents.cpp
+    shared/InputEvents.h
     shared/IpcChannel.cpp
     shared/IpcChannel.h
     shared/SharedPixels.cpp
     shared/SharedPixels.h
 )
 target_include_directories(qmlbrowser_ipc PUBLIC "${CMAKE_SOURCE_DIR}/shared")
-target_link_libraries(qmlbrowser_ipc PUBLIC Qt6::Network)
+target_link_libraries(qmlbrowser_ipc PUBLIC Qt6::Gui Qt6::Network)
 
 qt_add_executable(QmlServer
     server/main.cpp
@@ -80,6 +84,10 @@ qt_add_executable(QmlBrowser
 target_link_libraries(QmlBrowser PRIVATE qmlbrowser_ipc Qt6::Gui Qt6::Qml Qt6::Quick)
 if(WIN32)
     target_link_libraries(QmlBrowser PRIVATE dwmapi)
+endif()
+if(APPLE)
+    # The trackpad's "swipe between pages" setting.
+    target_link_libraries(QmlBrowser PRIVATE "-framework CoreFoundation")
 endif()
 
 qt_add_executable(QmlRenderer
@@ -130,6 +138,15 @@ target_include_directories(CanvasSmokeTest PRIVATE
 target_link_libraries(CanvasSmokeTest PRIVATE Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Test)
 set_target_properties(CanvasSmokeTest PROPERTIES MACOSX_BUNDLE FALSE WIN32_EXECUTABLE FALSE)
 
+# Sends trackpad scrolls and pinches through the browser's input messages to
+# a Qt Quick scene, headless, and compares them with direct delivery.
+qt_add_executable(InputEventsTest
+    tests/InputEventsTest.cpp
+    tests/InputEventsTest.h
+)
+target_link_libraries(InputEventsTest PRIVATE qmlbrowser_ipc Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Test)
+set_target_properties(InputEventsTest PROPERTIES MACOSX_BUNDLE FALSE WIN32_EXECUTABLE FALSE)
+
 foreach(_canvas_host QmlRenderer CanvasSmokeTest)
     add_custom_command(TARGET plasma POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${_canvas_host}>/canvas"
@@ -142,6 +159,7 @@ add_dependencies(CanvasSmokeTest plasma)
 
 enable_testing()
 add_test(NAME CanvasSmokeTest COMMAND CanvasSmokeTest)
+add_test(NAME InputEventsTest COMMAND InputEventsTest)
 
 # Puts a Qt Widgets application in an app://<name> tab. An application links
 # this and calls QmlBrowserHost::prepare() and attach() from main(). Only

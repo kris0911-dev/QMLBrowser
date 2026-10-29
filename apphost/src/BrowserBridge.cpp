@@ -69,6 +69,11 @@ BrowserBridge::BrowserBridge(QWidget *mainWindow, bool gpu, QObject *parent)
         message.insert(QStringLiteral("type"), QStringLiteral("ime"));
         send(message);
     });
+    connect(m_input, &InputInjector::swiped, this, [this](const QJsonObject &swipe) {
+        QJsonObject message = swipe;
+        message.insert(QStringLiteral("type"), QStringLiteral("swipe"));
+        send(message);
+    });
     connect(m_window, &QWidget::windowTitleChanged, this, &BrowserBridge::publishState);
 }
 

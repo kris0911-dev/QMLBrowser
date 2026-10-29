@@ -1,6 +1,7 @@
 #include "TabViewport.h"
 
 #include "BrowserTab.h"
+#include "InputEvents.h"
 #include "TabManager.h"
 
 #include <QCursor>
@@ -13,6 +14,7 @@
 #include <QKeyEvent>
 #include <QTextCharFormat>
 #include <QMouseEvent>
+#include <QNativeGestureEvent>
 #include <QQuickWindow>
 #include <QSGSimpleTextureNode>
 #include <QWheelEvent>
@@ -189,6 +191,7 @@ void TabViewport::postMouse(const QString &action, QMouseEvent *event)
     message.insert(QStringLiteral("button"), int(event->button()));
     message.insert(QStringLiteral("buttons"), int(event->buttons()));
     message.insert(QStringLiteral("mods"), int(event->modifiers()));
+    InputEvents::stamp(message, event);
     tab->postInput(message);
     event->accept();
 }
@@ -209,6 +212,7 @@ void TabViewport::postKey(const QString &action, QKeyEvent *event)
     message.insert(QStringLiteral("scan"), static_cast<double>(event->nativeScanCode()));
     message.insert(QStringLiteral("vk"), static_cast<double>(event->nativeVirtualKey()));
     message.insert(QStringLiteral("nativeMods"), static_cast<double>(event->nativeModifiers()));
+    InputEvents::stamp(message, event);
     tab->postInput(message);
     event->accept();
 }
@@ -344,19 +348,9 @@ void TabViewport::wheelEvent(QWheelEvent *event)
     if (!tab)
         return;
 
-    QJsonObject message;
-    message.insert(QStringLiteral("kind"), QStringLiteral("wheel"));
-    message.insert(QStringLiteral("x"), event->position().x());
-    message.insert(QStringLiteral("y"), event->position().y());
-    message.insert(QStringLiteral("px"), event->pixelDelta().x());
-    message.insert(QStringLiteral("py"), event->pixelDelta().y());
-    message.insert(QStringLiteral("ax"), event->angleDelta().x());
-    message.insert(QStringLiteral("ay"), event->angleDelta().y());
-    message.insert(QStringLiteral("buttons"), int(event->buttons()));
-    message.insert(QStringLiteral("mods"), int(event->modifiers()));
-    message.insert(QStringLiteral("phase"), int(event->phase()));
-    message.insert(QStringLiteral("inverted"), event->inverted());
-    tab->postInput(message);
+    // With the source, device and time, which decide whether the page
+    // scrolls it as a trackpad or a mouse wheel (shared/InputEvents.h).
+    tab->postInput(InputEvents::wheelMessage(event));
     event->accept();
 }
 
@@ -372,6 +366,7 @@ void TabViewport::hoverMoveEvent(QHoverEvent *event)
     message.insert(QStringLiteral("x"), event->position().x());
     message.insert(QStringLiteral("y"), event->position().y());
     message.insert(QStringLiteral("mods"), int(event->modifiers()));
+    InputEvents::stamp(message, event);
     tab->postInput(message);
     event->accept();
 }
@@ -418,4 +413,20 @@ void TabViewport::focusOutEvent(QFocusEvent *event)
 {
     postFocus(currentTab(), false);
     QQuickItem::focusOutEvent(event);
+}
+
+bool TabViewport::event(QEvent *event)
+{
+    // A trackpad pinch, rotation, smart zoom or swipe, which QQuickItem has
+    // no handler function for.
+    if (event->type() != QEvent::NativeGesture)
+        return QQuickItem::event(event);
+
+    if (BrowserTab *tab = currentTab()) {
+        tab->postInput(InputEvents::gestureMessage(static_cast<QNativeGestureEvent *>(event)));
+        event->accept();
+        return true;
+    }
+    event->ignore();
+    return false;
 }

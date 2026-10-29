@@ -1,12 +1,13 @@
 #pragma once
 
-#include <QElapsedTimer>
 #include <QEvent>
 #include <QJsonObject>
 #include <QObject>
 #include <QPointer>
 #include <QPointF>
 #include <QString>
+
+#include "InputEvents.h"
 
 QT_BEGIN_NAMESPACE
 class QTimer;
@@ -17,12 +18,12 @@ class WindowCompositor;
 
 // Replays the browser's input in the application.
 //
-// Pointer, wheel, key and focus events go through QWindowSystemInterface,
-// synchronously, into the window under the pointer or the active popup, as
-// if the platform had produced them. Qt then does its normal work: double
-// clicks, enter and leave, hover, tooltips, popup dismissal, modal blocking
-// and shortcuts. Input-method events go straight to the focus object, since
-// the composition itself lives in the browser.
+// Pointer, wheel, gesture, key and focus events go through
+// QWindowSystemInterface, synchronously, into the window under the pointer or
+// the active popup, as if the platform had produced them. Qt then does its
+// normal work: double clicks, enter and leave, hover, tooltips, popup
+// dismissal, modal blocking and shortcuts. Input-method events go straight to
+// the focus object, since the composition itself lives in the browser.
 //
 // The other direction is reported too: the cursor shape the pointer should
 // have, and the focused widget's input-method state.
@@ -48,6 +49,9 @@ signals:
     // The "ime" message without its type: serial, enabled, hints, rects in
     // page coordinates, surrounding text, positions.
     void inputMethodChanged(const QJsonObject &state);
+    // A trackpad swipe the application left alone: "direction" and
+    // "fingers" (shared/InputEvents.h).
+    void swiped(const QJsonObject &swipe);
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -55,6 +59,7 @@ protected:
 private:
     void deliverMouse(QEvent::Type type, const QJsonObject &message);
     void deliverWheel(const QJsonObject &message);
+    void deliverGesture(const QJsonObject &message);
     void deliverHover(const QJsonObject &message);
     void deliverKey(QEvent::Type type, const QJsonObject &message);
     void deliverFocus(bool on);
@@ -70,7 +75,10 @@ private:
     WindowCompositor *m_windows = nullptr;
     QTimer *m_cursorTimer = nullptr;
     QTimer *m_focusTimer = nullptr;
-    QElapsedTimer m_clock;
+    // The browser's event times, which a QQuickWidget's Flickable measures
+    // scrolling speed from, and QGuiApplication double clicks.
+    InputClock m_clock;
+    SwipeNavigation m_swipe;
 
     bool m_focused = false;
     QPointF m_lastGlobal;

@@ -46,6 +46,7 @@ protected:
     QVariant inputMethodQuery(Qt::InputMethodQuery query) const override;
     void focusInEvent(QFocusEvent *event) override;
     void focusOutEvent(QFocusEvent *event) override;
+    bool event(QEvent *event) override;
 
 private:
     void publish();

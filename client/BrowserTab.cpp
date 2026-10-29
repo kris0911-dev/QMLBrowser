@@ -10,6 +10,32 @@
 
 #include <cstring>
 
+#ifdef Q_OS_MACOS
+#include <CoreFoundation/CoreFoundation.h>
+#endif
+
+namespace {
+
+// Whether a swipe the page left alone turns the page. Two fingers follow
+// System Settings > Trackpad > More Gestures > Swipe between pages; a
+// three-finger swipe arrives only when that setting asks for three fingers.
+bool swipeTurnsPages(int fingers)
+{
+#ifdef Q_OS_MACOS
+    if (fingers < 3) {
+        Boolean valid = false;
+        const Boolean on = CFPreferencesGetAppBooleanValue(
+                CFSTR("AppleEnableSwipeNavigateWithScrolls"), kCFPreferencesAnyApplication,
+                &valid);
+        return !valid || on;
+    }
+#endif
+    Q_UNUSED(fingers);
+    return true;
+}
+
+} // namespace
+
 BrowserTab::BrowserTab(int id, const QString &channelName, QObject *parent)
     : QObject(parent)
     , m_id(id)
@@ -279,6 +305,14 @@ void BrowserTab::onMessage(const QJsonObject &message)
         emit shortcutRequested(message.value(QStringLiteral("key")).toString());
     } else if (type == QLatin1String("fullscreen")) {
         emit fullScreenRequested(message.value(QStringLiteral("on")).toBool());
+    } else if (type == QLatin1String("swipe")) {
+        // A trackpad swipe between pages (shared/InputEvents.h).
+        if (!swipeTurnsPages(message.value(QStringLiteral("fingers")).toInt()))
+            return;
+        if (message.value(QStringLiteral("direction")).toString() == QLatin1String("back"))
+            back();
+        else
+            forward();
     }
 }
 

@@ -175,6 +175,12 @@ int main(int argc, char *argv[])
                          channel->send(message);
                      });
 
+    QObject::connect(&page, &OffscreenPage::swiped, &app, [channel](const QJsonObject &swipe) {
+        QJsonObject message = swipe;
+        message.insert(QStringLiteral("type"), QStringLiteral("swipe"));
+        channel->send(message);
+    });
+
     QQuickItem *root = page.rootItem();
     QObject::connect(channel, &IpcChannel::received, &app,
                      [&page, root](const QJsonObject &message) {
