@@ -9,6 +9,7 @@
 - [The HTTP server](#the-http-server)
 - [How a tab works](#how-a-tab-works)
 - [Input methods](#input-methods)
+- [Trackpad (macOS)](#trackpad-macos)
 - [App tabs](#app-tabs)
 - [3D](#3d)
 - [Next step: a platform plugin](#next-step-a-platform-plugin)
@@ -61,7 +62,7 @@ Deployment details:
 
 ### macOS
 
-macOS 12.6 with Xcode 14.2 (the newest it runs), Qt 6.7 (Qt 6.8+ needs Xcode 15), CMake 3.22+. `QTDIR=$HOME/Qt/6.7.3/macos ./build-macos.sh` generates `build/macos-xcode` and builds Debug. Each bundle gets a `qt.conf` pointing at `QTDIR`; code signing is off. In Xcode run the QmlServer scheme, then debug QmlBrowser; attach to `QmlRenderer` or `WidgetApp` by name to debug a tab. Qt Creator can use the `macos-debug` preset.
+macOS 12.6 with Xcode 14.2 (the newest it runs), Qt 6.7 (Qt 6.8+ needs Xcode 15), CMake 3.22+. `QTDIR=$HOME/Qt/6.7.3/macos ./build-macos.sh` generates `build/macos-xcode` and builds Debug: QmlServer, QmlBrowser, QmlRenderer, the `plasma` canvas library and WidgetApp. Each bundle gets a `qt.conf` pointing at `QTDIR`; code signing is off, except that the copy of `plasma.dylib` inside `QmlRenderer.app` is signed ad hoc, because `codesign` refuses a bundle holding unsigned code. The script leaves out the tests; build them with `cmake --build build/macos-xcode --config Debug --target CanvasSmokeTest InputEventsTest` and run `ctest -C Debug --test-dir build/macos-xcode`. In Xcode run the QmlServer scheme, then debug QmlBrowser; attach to `QmlRenderer` or `WidgetApp` by name to debug a tab. Qt Creator can use the `macos-debug` preset.
 
 Tab processes are Dock-less accessories. Pages render through Metal; where there is no Metal device (a virtual machine), Qt falls back to OpenGL, and the renderer asks for a 4.1 core profile so Qt Quick 3D still works.
 
@@ -84,7 +85,7 @@ On Windows the tab strip is the title bar: drag empty space to move, double-clic
 | F11 | Full screen; Esc leaves |
 | Ctrl+Shift+F | Hide the bars; Esc restores |
 
-On a Mac trackpad, swipe between pages goes back and forward as in Safari: two fingers sideways, or three if System Settings > Trackpad asks for three. A page that scrolls sideways keeps the swipe. Scrolling, pinch, smart zoom, rotation, tap, secondary click and three-finger drag reach the page as the platform reports them; Mission Control, App Exposé, Launchpad, Show Desktop, Notification Center and swiping between full-screen apps belong to macOS.
+On a Mac trackpad, swipe sideways to go back and forward, as in Safari; see [Trackpad (macOS)](#trackpad-macos).
 
 Shortcuts belong to the browser window, so they work while a page has focus. Esc is only claimed while the chrome is hidden. Full screen and hidden bars are independent.
 
@@ -160,9 +161,9 @@ void qmlbrowser_canvas_draw(uint32_t *pixels, int width, int height,
 
 Pixels are `0xAARRGGBB`, premultiplied (`QImage::Format_ARGB32_Premultiplied`). A page writes `NativeCanvas { library: "plasma"; time: ... }`, and the renderer loads `canvas\plasma.dll` (`.so`, `.dylib`) from its own folder. Only letters, digits, `-` and `_` are accepted, so a page cannot name a path; a library with the wrong ABI version or missing exports gives `status: NativeCanvas.Error` and a reason in `errorString`. `draw` runs on the renderer's GUI thread, and a crash in it takes down only that tab. Like everything in `QmlBrowser.Native`, every site can use an installed library.
 
-The sample is `canvas\plasma\plasma.c` (`PlasmaCanvas.vcxproj`, output `bin\x64\<Config>\canvas\plasma.dll`, the same name in Debug and Release). The renderer draws at most 960 pixels across and scales up.
+The sample is `canvas\plasma\plasma.c` (`PlasmaCanvas.vcxproj`, output `bin\x64\<Config>\canvas\plasma.dll`, the same name in Debug and Release; on macOS CMake copies `plasma.dylib` into `QmlRenderer.app/Contents/MacOS/canvas/`). The renderer draws at most 960 pixels across and scales up.
 
-**Smoke test.** `tests\CanvasSmokeTest` loads `plasma` the way the renderer does and then shows it through a real `NativeCanvas` in a QML scene. It checks that names which are paths are rejected, that a missing library is reported, that the library fills every pixel opaquely, honours `stride` and reacts to `time`, and that the grabbed QML frame shows the plasma. It runs headless (offscreen platform, software scene graph), so it needs no GPU: `test.bat [Debug|Release]` on Windows, `ctest` in a CMake build. `tests\InputEventsTest` sends a macOS-style trackpad scroll and pinch to a Qt Quick scene twice, directly and through the browser's input messages read in one batch, and checks that both scenes end up the same.
+**Smoke test.** `tests\CanvasSmokeTest` loads `plasma` the way the renderer does and then shows it through a real `NativeCanvas` in a QML scene. It checks that names which are paths are rejected, that a missing library is reported, that the library fills every pixel opaquely, honours `stride` and reacts to `time`, and that the grabbed QML frame shows the plasma. It runs headless (offscreen platform, software scene graph), so it needs no GPU: `test.bat [Debug|Release]` on Windows, `ctest` in a CMake build. The other test, `tests\InputEventsTest`, is described under [Trackpad (macOS)](#trackpad-macos).
 
 ## The HTTP server
 
@@ -223,7 +224,7 @@ Tab to browser:
 | `swipe` | `direction`, `fingers` | A trackpad swipe between pages that the page did not take; the browser goes back or forward |
 | `ime` | `serial`, `enabled`, rects, text, positions | Focused field's input-method state; see below |
 
-`input` kinds: `mouse` (`action` press/release/move/dbl, `x`, `y`, `button`, `buttons`, `mods`), `hover` (move/leave), `wheel` (pixel and angle deltas, `phase`, `inverted`, `source`, `touchpad`), `gesture` (a trackpad pinch, rotation, smart zoom or swipe: `type`, `value`, `dx`, `dy`, `fingers`, `touchpad`), `key` (`action`, `key`, `text`, `mods`, `repeat`, native codes), `focus` (`on`), `ime` (`preedit`, `commit`, replacement range, `attributes`). Pointer and key messages carry `t`, the time the platform gave the event; the receiver moves it onto its own clock. A page rebuilds each event with the source and device the platform reported, because Flickable scrolls by pixels only for a wheel event the system synthesized from a trackpad, as macOS reports a two-finger scroll, and measures speed from the event times (`shared/InputEvents.h`).
+`input` kinds: `mouse` (`action` press/release/move/dbl, `x`, `y`, `button`, `buttons`, `mods`), `hover` (move/leave), `wheel` (pixel and angle deltas, `phase`, `inverted`, `source`, `touchpad`), `gesture` (a trackpad pinch, rotation, smart zoom or swipe: `type`, `value`, `dx`, `dy`, `fingers`, `touchpad`), `key` (`action`, `key`, `text`, `mods`, `repeat`, native codes), `focus` (`on`), `ime` (`preedit`, `commit`, replacement range, `attributes`). Pointer and key messages carry `t`, the time the platform gave the event; the receiver moves it onto its own clock. [Trackpad (macOS)](#trackpad-macos) explains why `wheel` needs `source`, `touchpad` and `t`.
 
 ## Input methods
 
@@ -235,6 +236,50 @@ The OS input method (macOS text input, Windows IMM/TSF) only talks to the browse
 4. When focus moves mid-composition, the tab commits the preedit into the old field and bumps `serial`; the browser then resets the OS input method and drops the duplicate commit.
 
 The candidate window can trail the caret by one message while typing fast.
+
+## Trackpad (macOS)
+
+Like the input method, the trackpad only talks to the browser window. `TabViewport` forwards what it gets, and the tab (`OffscreenPage` for a page, `InputInjector` for an app) rebuilds each event from the message. The shared code is `shared/InputEvents`.
+
+| On the trackpad | In the tab |
+|---|---|
+| Two-finger scroll | `wheel`; Flickable scrolls by pixels, with momentum |
+| Pinch, rotate, smart zoom | `gesture`; a `QNativeGestureEvent` from the trackpad device, which a `PinchHandler` follows |
+| Sideways swipe (two fingers, or three) | Back or Forward, unless the page uses it ([below](#swipe-between-pages)) |
+| Tap, secondary click, three-finger drag | Ordinary mouse events |
+| Mission Control, App Exposé, Launchpad, Show Desktop, Notification Center, swiping between full-screen apps | Handled by macOS; never reach the browser |
+
+### Scrolling
+
+Flickable reads more of a wheel event than its deltas. It scrolls by pixels only when the event is marked as synthesized by the system (`Qt::MouseEventSynthesizedBySystem`), which is how macOS marks a trackpad scroll. Any other wheel event counts as mouse-wheel notches, so a forwarded two-finger scroll used to jump. Flickable also measures speed from event timestamps, and ignores the delta of an event that is no later than the one before it.
+
+So a `wheel` message carries `source`, `touchpad`, `phase` and `inverted` besides the deltas, and every pointer and key message carries `t`, the time the platform gave the event. The tab rebuilds the event with the same source and a stand-in trackpad device, and moves `t` onto its own clock (`InputClock`). That clock starts the browser's times where its own are, and starts them again if the two drift more than a second apart: a tab started mid-session, or Windows' 32-bit message clock wrapping. Without `t`, events read from the socket in one batch all got the same time and Flickable dropped their deltas. The times matter on Windows too: without them, a page stopped responding to the mouse wheel after its first flick settled.
+
+### Swipe between pages
+
+As in Safari, the page sees every event first, so a horizontal list still scrolls. Only a swipe that nothing in the page used turns the page. `SwipeNavigation` watches the events the tab has delivered:
+
+- **Two fingers** arrive as a phased scroll. From `ScrollBegin` it adds up the pixel deltas, and when the fingers lift (`ScrollEnd`, or the first momentum event) it decides once. The scroll is a swipe if no event in it was accepted, and it travelled at least 80 pixels sideways and at least twice as far sideways as vertically. Fingers moving right mean Back; `inverted` (natural scrolling) tells which way the fingers moved. Mouse wheels have no phases and never swipe, so Windows never swipes.
+- **Three fingers** arrive as one `Qt::SwipeNativeGesture`, and only when System Settings > Trackpad > More Gestures > Swipe between pages asks for three fingers. Value 180 is Back and 0 is Forward; up and down are ignored.
+
+The tab then sends `swipe` (`direction` `back` or `forward`, and `fingers`), and the browser goes back or forward in that tab's history. For two fingers the browser follows the same setting (`AppleEnableSwipeNavigateWithScrolls`): when it is off, a two-finger swipe does nothing. A setting that was never written counts as on.
+
+**In an app tab** it is harder to find out whether a widget used the scroll. `QWidgetWindow` hands widgets a copy of the wheel event and never copies back whether one accepted it, so Qt reports every scroll in a widget window as taken. While a wheel event is being delivered, `InputInjector` installs a short-lived application event filter. The filter follows the event up the widget tree, from the widget under the pointer to the first one that accepts it, or to the window. A widget that scrolls sideways, such as a scroll area with a horizontal scroll bar, keeps the swipe. For a window that is not a widget, such as a Qt Quick window, Qt's own answer is used. Qt never reports whether an application took a native gesture, so in an app tab a three-finger swipe always turns the page.
+
+### Testing
+
+`tests\InputEventsTest` is headless, like `CanvasSmokeTest`: `test.bat` on Windows, `ctest` in a CMake build. It sends a macOS-style trackpad scroll and pinch to a Qt Quick scene twice, once directly and once through the browser's messages read in one batch, and checks that both scenes end up the same. It also checks that:
+
+- every gesture type survives forwarding
+- a mouse wheel stays a mouse wheel
+- swipe decisions are right:
+  - Back and Forward, with natural scrolling and without
+  - three-finger swipes
+  - a swipe the page scrolls with
+  - vertical, short, diagonal and mouse-wheel scrolls that must not navigate
+- `InputClock` keeps the spacing between events, and starts again after a jump
+
+App tabs and the System Settings switch are not covered; check them by hand on a Mac.
 
 ## App tabs
 
@@ -268,7 +313,7 @@ A bare name is looked up next to the browser; a path is relative to `apps.json`;
 
 ### How it works
 
-Every visible top-level widget (main window, menus, combo lists, tooltips, dialogs) is kept off screen and painted with `QWidget::render` into the tab's frame; dialogs get a drawn title strip and shadow. Input is replayed through `QWindowSystemInterface`, so Qt handles double clicks, hover, tooltips, popups, modality and shortcuts as usual. Key presses go through the shortcut map first, as a platform plugin does. The library tracks open popups and modal windows itself, because Qt 6.8+ does not count a popup whose native window is not mapped.
+Every visible top-level widget (main window, menus, combo lists, tooltips, dialogs) is kept off screen and painted with `QWidget::render` into the tab's frame; dialogs get a drawn title strip and shadow. Input is replayed through `QWindowSystemInterface`, so Qt handles double clicks, hover, tooltips, popups, modality and shortcuts as usual. Key presses go through the shortcut map first, as a platform plugin does. Trackpad scrolls and gestures take the same path; see [Trackpad (macOS)](#trackpad-macos) for how swipe between pages works in an app tab. The library tracks open popups and modal windows itself, because Qt 6.8+ does not count a popup whose native window is not mapped.
 
 | | Software (default) | Gpu |
 |---|---|---|
@@ -333,7 +378,7 @@ apphost\       QmlBrowserHost
   include\QmlBrowserHost.h      the public API
   src\BrowserBridge             socket and messages
   src\WindowCompositor          window stacking, frames
-  src\InputInjector             pointer, keys, focus, IME, cursor
+  src\InputInjector             pointer, wheel, gestures, keys, focus, IME, cursor, swipe
   src\OffscreenPlatform         Software mode setup
   src\NativePlatform            GPU mode setup
 widgetapp\     WidgetApp: GalleryWindow and its pages

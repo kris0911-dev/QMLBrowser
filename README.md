@@ -58,11 +58,16 @@ first argument to start elsewhere. On Windows the tab strip is the title bar.
 | `F11` | Full screen (`Esc` leaves) |
 | `Ctrl+Shift+F` | Hide the bars (`Esc` restores) |
 
+On a Mac trackpad, swipe sideways with two fingers (or three, if System
+Settings asks for three) to go back and forward, as in Safari. A page or
+widget that scrolls sideways keeps the swipe. See
+[Trackpad (macOS)](DOCUMENTATION.md#trackpad-macos).
+
 Worth opening:
 
 - `/gallery.qml`: animation, gradients, Canvas
 - `/3d.qml`: a Qt Quick 3D scene, and a cube in plain Qt Quick
-- `/native.qml`: items drawn by C++ in the renderer (QPainter, scene graph geometry, a computed texture), and pixels from a plain C library (`canvas\plasma.dll`)
+- `/native.qml`: items drawn by C++ in the renderer (QPainter, scene graph geometry, a computed texture), and pixels from a plain C library (`canvas\plasma.dll`, `plasma.dylib` on macOS)
 - `/ime.qml`, `/ime-controls.qml`: input-method test pages (Chinese, Japanese, …)
 - `app://widgets` (the ▣ button): the Widgets app; `app://widgets/3d` is its OpenGL page
 
