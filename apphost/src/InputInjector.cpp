@@ -83,6 +83,53 @@ bool isMenuLike(const QWidget *window)
     return type == Qt::Popup || type == Qt::ToolTip;
 }
 
+// Finds out whether a widget took a wheel event. QWidgetWindow hands widgets
+// a copy of the event and never copies its acceptance back, so
+// QWindowSystemInterface reports every wheel event in a widget window as
+// taken. While installed on the application, this filter follows QApplication
+// passing the event up from the widget under the pointer: it stops at a widget
+// that accepts it, or else at the window or at a widget that keeps mouse
+// events from its parents. That last widget the filter hands the event to
+// itself, to read the answer.
+class WheelWatcher : public QObject
+{
+public:
+    // False when no widget got the event: a Qt Quick window, a modal dialog
+    // blocking it, or a popup swallowing it.
+    bool seen() const { return m_seen; }
+    bool taken() const { return m_taken; }
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        if (m_delivering || event->type() != QEvent::Wheel || !watched->isWidgetType())
+            return false;
+        auto *widget = static_cast<QWidget *>(watched);
+        // Wheel events a widget sends on while handling one, as a scroll area
+        // does to its scroll bars, are not the event going up.
+        if (m_seen && (!m_last || widget != m_last->parentWidget()))
+            return false;
+        m_seen = true;
+        m_last = widget;
+        if (!widget->isWindow() && !widget->testAttribute(Qt::WA_NoMousePropagation)) {
+            // It goes on to the parent unless this widget accepts it.
+            m_taken = true;
+            return false;
+        }
+        m_delivering = true;
+        QCoreApplication::sendEvent(widget, event);
+        m_delivering = false;
+        m_taken = event->isAccepted();
+        return true;
+    }
+
+private:
+    QPointer<QWidget> m_last;
+    bool m_seen = false;
+    bool m_taken = false;
+    bool m_delivering = false;
+};
+
 } // namespace
 
 InputInjector::InputInjector(WindowCompositor *windows, QObject *parent)
@@ -294,18 +341,23 @@ void InputInjector::deliverWheel(const QJsonObject &message)
     // The device and source as the browser's platform reported them: a
     // trackpad scroll is synthesized by the system, and Qt Quick scrolls only
     // that by pixels (shared/InputEvents.h). This overload has no delivery
-    // parameter; delivered right away, its result says whether the
-    // application took the scroll, which decides swiping between pages.
+    // parameter; delivered right away, its result says whether a Qt Quick
+    // window took the scroll, and the watcher says it for widgets. That
+    // decides swiping between pages.
+    WheelWatcher watcher;
+    qApp->installEventFilter(&watcher);
     QWindowSystemInterface::setSynchronousWindowSystemEvents(true);
-    const bool taken = QWindowSystemInterface::handleWheelEvent(
+    const bool accepted = QWindowSystemInterface::handleWheelEvent(
             handle, ulong(m_clock.time(message)), InputEvents::device(message),
             nativeLocal(global - QPointF(target->geometry().topLeft()), handle),
             nativeGlobal(global, handle), pixel, angle,
             modsFrom(message), Qt::ScrollPhase(message.value(QStringLiteral("phase")).toInt()),
             InputEvents::source(message), message.value(QStringLiteral("inverted")).toBool());
     QWindowSystemInterface::setSynchronousWindowSystemEvents(false);
+    qApp->removeEventFilter(&watcher);
     m_lastGlobal = global;
 
+    const bool taken = watcher.seen() ? watcher.taken() : accepted;
     const QJsonObject swipe = m_swipe.observe(message, taken);
     if (!swipe.isEmpty())
         emit swiped(swipe);

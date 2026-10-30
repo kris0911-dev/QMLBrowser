@@ -36,7 +36,9 @@ echo "Qt: $QTDIR"
 cmake -S "$root" -B "$root/build/macos-xcode" -G Xcode \
     -DCMAKE_PREFIX_PATH="$QTDIR" \
     -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
-cmake --build "$root/build/macos-xcode" --config Debug --target QmlServer QmlBrowser QmlRenderer WidgetApp
+# plasma is the C canvas library the renderer loads from its canvas folder.
+cmake --build "$root/build/macos-xcode" --config Debug \
+    --target QmlServer QmlBrowser QmlRenderer plasma WidgetApp
 
 echo
 echo "Debug in Xcode:"

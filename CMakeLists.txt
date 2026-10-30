@@ -147,10 +147,19 @@ qt_add_executable(InputEventsTest
 target_link_libraries(InputEventsTest PRIVATE qmlbrowser_ipc Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Test)
 set_target_properties(InputEventsTest PROPERTIES MACOSX_BUNDLE FALSE WIN32_EXECUTABLE FALSE)
 
+# On macOS the copy lands inside QmlRenderer.app before that bundle is
+# signed, and codesign refuses a bundle holding unsigned code. Xcode signs
+# plasma itself only after this step, so the copy is signed here (ad hoc).
+if(APPLE)
+    set(_canvas_sign codesign --force --sign -)
+else()
+    set(_canvas_sign ${CMAKE_COMMAND} -E true)
+endif()
 foreach(_canvas_host QmlRenderer CanvasSmokeTest)
     add_custom_command(TARGET plasma POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${_canvas_host}>/canvas"
         COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:plasma>" "$<TARGET_FILE_DIR:${_canvas_host}>/canvas/"
+        COMMAND ${_canvas_sign} "$<TARGET_FILE_DIR:${_canvas_host}>/canvas/$<TARGET_FILE_NAME:plasma>"
         COMMENT "Copy the plasma canvas library next to ${_canvas_host}"
         VERBATIM)
 endforeach()
